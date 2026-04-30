@@ -587,6 +587,7 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus }) {
         </div>
 
         <CardContent className="space-y-3 pt-3">
+          <OrderStatusSummary orders={orders} />
           {displayedOrders.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t("noOrdersFilter")}</p>
           ) : (
@@ -685,6 +686,25 @@ function MobileOrderSheet({ selectedOrder, onStatus, onClose }) {
           <OrderDetailContent selectedOrder={selectedOrder} onStatus={onStatus} />
         </div>
       </div>
+    </div>
+  );
+}
+
+function OrderStatusSummary({ orders }) {
+  const statuses = ["PENDING_PAYMENT", "RECEIVED", "PREPARING", "READY"];
+  const counts = statuses.map((status) => ({
+    status,
+    count: orders.filter((order) => order.status === status).length
+  }));
+
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      {counts.map((entry) => (
+        <div key={entry.status} className="rounded-md border border-border bg-muted/30 px-3 py-2">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{entry.status.replace("_", " ")}</div>
+          <div className="mt-1 text-xl font-bold">{entry.count}</div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1256,14 +1276,24 @@ function PromoCodesView({ promos, request, reload }) {
 function AnalyticsView({ analytics }) {
   const { t } = useLanguage();
   if (!analytics) return null;
+  const dailyOrders = Number(analytics.daily?.dailyOrderCount || 0);
+  const weeklyOrders = Number(analytics.weekly?.weeklyOrderCount || 0);
   return (
-    <div className="grid gap-4 lg:grid-cols-3">
-      <Metric title={t("dailyRevenue")}   value={usd(analytics.daily?.dailyRevenueUsd)}               sub={khr(analytics.daily?.dailyRevenueKhr)} />
-      <Metric title={t("weeklyRevenue")}  value={usd(analytics.weekly?.weeklyRevenueUsd)}              sub={khr(analytics.weekly?.weeklyRevenueKhr)} />
-      <Metric title={t("averageOrder")}   value={usd(analytics.averageOrderValue?.averageOrderValueUsd)} sub={khr(analytics.averageOrderValue?.averageOrderValueKhr)} />
-      <ListCard title={t("topItems")}         rows={analytics.topSellingItems}    label="itemName"    value="quantity" />
-      <ListCard title={t("sortStatus")}  rows={analytics.orderCountByStatus} label="status"      value="count" />
-      <ListCard title={t("revenueByTable")}  rows={analytics.revenueByTable}     label="tableNumber" value="revenueUsd" currency />
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Metric title={t("dailyRevenue")} value={usd(analytics.daily?.dailyRevenueUsd)} sub={`${dailyOrders} ${t("orders")} · ${khr(analytics.daily?.dailyRevenueKhr)}`} />
+        <Metric title={t("weeklyRevenue")} value={usd(analytics.weekly?.weeklyRevenueUsd)} sub={`${weeklyOrders} ${t("orders")} · ${khr(analytics.weekly?.weeklyRevenueKhr)}`} />
+        <Metric title={t("averageOrder")} value={usd(analytics.averageOrderValue?.averageOrderValueUsd)} sub={khr(analytics.averageOrderValue?.averageOrderValueKhr)} />
+        <Metric title={t("payments")} value={String((analytics.paymentBreakdown || []).reduce((sum, row) => sum + Number(row.count || 0), 0))} sub={t("transactionLog")} />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        <AnalyticsBarsCard title={t("topItems")} rows={analytics.topSellingItems} label="itemName" value="quantity" />
+        <AnalyticsBarsCard title={t("sortStatus")} rows={analytics.orderCountByStatus} label="status" value="count" />
+        <AnalyticsBarsCard title={t("revenueByTable")} rows={analytics.revenueByTable} label="tableNumber" value="revenueUsd" currency />
+        <ListCard title="Peak hours" rows={analytics.peakHours} label="hour" value="orders" hour />
+        <ListCard title="Payment breakdown" rows={analytics.paymentBreakdown} label="paymentMethod" value="amountUsd" currency />
+      </div>
     </div>
   );
 }
@@ -1350,14 +1380,43 @@ function Metric({ title, value, sub }) {
   );
 }
 
-function ListCard({ title, rows = [], label, value, currency }) {
+function AnalyticsBarsCard({ title, rows = [], label, value, currency }) {
+  const maxValue = Math.max(1, ...rows.map((row) => Number(row[value] || 0)));
+  return (
+    <Card>
+      <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">-</p>
+        ) : rows.map((row) => {
+          const amount = Number(row[value] || 0);
+          return (
+            <div key={row[label]} className="space-y-1.5">
+              <div className="flex justify-between gap-3 text-sm">
+                <span className="min-w-0 truncate">{row[label]}</span>
+                <span className="shrink-0 font-semibold">{currency ? usd(amount) : amount}</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(4, (amount / maxValue) * 100)}%` }} />
+              </div>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ListCard({ title, rows = [], label, value, currency, hour }) {
   return (
     <Card>
       <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
       <CardContent className="space-y-2">
-        {rows.map((row) => (
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">-</p>
+        ) : rows.map((row) => (
           <div key={row[label]} className="flex justify-between rounded-md bg-muted px-3 py-2 text-sm">
-            <span>{row[label]}</span>
+            <span>{hour ? `${String(row[label]).padStart(2, "0")}:00` : row[label]}</span>
             <span className="font-semibold">{currency ? usd(row[value]) : row[value]}</span>
           </div>
         ))}

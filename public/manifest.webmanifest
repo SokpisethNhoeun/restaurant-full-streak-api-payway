@@ -1,0 +1,50 @@
+{
+  "name": "HappyBoat QR Ordering",
+  "short_name": "HappyBoat",
+  "description": "Mobile dine-in ordering, Bakong KHQR payments, and staff order management.",
+  "id": "/",
+  "start_url": "/t/T01?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#fdfcf8",
+  "theme_color": "#0f8a7f",
+  "categories": ["food", "business", "productivity"],
+  "lang": "en",
+  "dir": "ltr",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/maskable-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Table Order",
+      "short_name": "Order",
+      "description": "Open the default table ordering page.",
+      "url": "/t/T01",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Staff Dashboard",
+      "short_name": "Dashboard",
+      "description": "Open live restaurant operations.",
+      "url": "/dashboard",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

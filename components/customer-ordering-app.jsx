@@ -23,6 +23,7 @@ const PRICE_FILTERS = [
 ];
 
 const CUSTOMER_STORAGE_TTL_MS = 12 * 60 * 60 * 1000;
+const MIN_CART_TOTAL_USD = 0.01;
 
 export default function CustomerOrderingApp({ tableNumber }) {
   const { t } = useLanguage();
@@ -51,6 +52,8 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const pollingInFlight = useRef({});
   const paidToastShown = useRef({});
   const cartRef = useRef(null);
+  const customerAudioRef = useRef(null);
+  const lastOrderStatusRef = useRef({});
   const welcomeToastShown = useRef(false);
 
   const storageKeys = useMemo(() => ({
@@ -59,6 +62,53 @@ export default function CustomerOrderingApp({ tableNumber }) {
     payments: customerStorageKey(tableNumber, "payments"),
     deletedOrders: customerStorageKey(tableNumber, "deleted-orders"),
   }), [tableNumber]);
+
+  const unlockCustomerAlert = useCallback(() => {
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      customerAudioRef.current = customerAudioRef.current || new AudioContext();
+      if (customerAudioRef.current.state === "suspended") {
+        customerAudioRef.current.resume().catch(() => {});
+      }
+    } catch {
+      // Audio unlock is best-effort on mobile browsers.
+    }
+  }, []);
+
+  const playCustomerAlert = useCallback(() => {
+    try {
+      if (navigator.vibrate) {
+        navigator.vibrate([220, 90, 220, 90, 320]);
+      }
+
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      const ctx = customerAudioRef.current || new AudioContext();
+      customerAudioRef.current = ctx;
+      const play = () => {
+        const nowTime = ctx.currentTime;
+        [0, 0.2, 0.4].forEach((offset, index) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(index % 2 === 0 ? 880 : 1174, nowTime + offset);
+          gain.gain.setValueAtTime(0.0001, nowTime + offset);
+          gain.gain.exponentialRampToValueAtTime(0.13, nowTime + offset + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.0001, nowTime + offset + 0.16);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(nowTime + offset);
+          osc.stop(nowTime + offset + 0.18);
+        });
+      };
+      if (ctx.state === "suspended") {
+        ctx.resume().then(play).catch(() => {});
+        return;
+      }
+      play();
+    } catch {
+      // Notifications should not block ordering.
+    }
+  }, []);
 
   const showToast = useCallback((text, variant = "success") => {
     const options = goeyToastOptions();
@@ -86,8 +136,19 @@ export default function CustomerOrderingApp({ tableNumber }) {
     setMessage(text);
     if (paidToastShown.current[orderId]) return;
     paidToastShown.current[orderId] = true;
+    playCustomerAlert();
     showToast(text);
-  }, [showToast, t]);
+  }, [playCustomerAlert, showToast, t]);
+
+  const notifyOrderStatusChanged = useCallback((order) => {
+    const statusText = customerStatusLabel(order.status, t);
+    setMessage(`${t("orderStatusUpdated")}: ${statusText}`);
+    playCustomerAlert();
+    gooeyToast.info(t("orderStatusUpdated"), goeyToastOptions({
+      description: `${order.orderNumber || t("order")} · ${statusText}`,
+      icon: <Clock className="h-4 w-4" />,
+    }));
+  }, [playCustomerAlert, t]);
 
   useEffect(() => {
     setLoadedStorageScope("");
@@ -96,9 +157,18 @@ export default function CustomerOrderingApp({ tableNumber }) {
     setPayments(readCustomerStorage(storageKeys.payments, {}));
     setDeletedOrderIds(readCustomerStorage(storageKeys.deletedOrders, []));
     paidToastShown.current = {};
+    lastOrderStatusRef.current = {};
     setOpenPaymentOrderId(null);
     setLoadedStorageScope(storageKeys.cart);
   }, [storageKeys.cart, storageKeys.deletedOrders, storageKeys.orders, storageKeys.payments]);
+
+  useEffect(() => {
+    orders.forEach((order) => {
+      if (order?.id && order.status && !lastOrderStatusRef.current[order.id]) {
+        lastOrderStatusRef.current[order.id] = order.status;
+      }
+    });
+  }, [orders]);
 
   useEffect(() => {
     if (loadedStorageScope !== storageKeys.cart) return;
@@ -130,9 +200,11 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
   useEffect(() => {
     if (loading || !table || welcomeToastShown.current) return;
+    const tableLabel = customerTableLabel(table, tableNumber, t);
+    if (!tableLabel) return;
     welcomeToastShown.current = true;
     gooeyToast.info(t("welcomeTitle"), goeyToastOptions({
-      description: `${t("youAreAtTable")} ${table.label || tableNumber}`,
+      description: `${t("youAreAtTable")} ${tableLabel}`,
       icon: <Utensils className="h-4 w-4" />,
     }));
   }, [loading, table, tableNumber, t]);
@@ -148,6 +220,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
           const verified = await api(`/api/payments/${payment.id}/verify`, { method: "POST" });
           setPayments((prev) => ({ ...prev, [orderId]: verified }));
           if (verified.status === "PAID") {
+            lastOrderStatusRef.current[orderId] = "RECEIVED";
             setOrders((prev) => prev.map((order) => order.id === orderId ? { ...order, status: "RECEIVED" } : order));
             notifyPaymentReceived(orderId);
           }
@@ -179,12 +252,15 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
   const totals = useMemo(() => {
     const subtotalUsd = cart.reduce((sum, item) => sum + Number(item.lineUsd || 0), 0);
-    const discountUsd = promoState.status === "valid"
+    const rawDiscountUsd = promoState.status === "valid"
       ? promoDiscountForSubtotal(promoState.detail, subtotalUsd)
       : 0;
+    const maxDiscountUsd = cart.length > 0 ? Math.max(0, subtotalUsd - MIN_CART_TOTAL_USD) : subtotalUsd;
+    const discountUsd = Math.min(rawDiscountUsd, maxDiscountUsd);
     const totalUsd = Math.max(0, subtotalUsd - discountUsd);
-    const totalKhr = Math.round(totalUsd * Number(menu.exchangeRateKhrPerUsd || 4100));
-    return { subtotalUsd, discountUsd, totalUsd, totalKhr };
+    const billableTotalUsd = cart.length > 0 ? Math.max(MIN_CART_TOTAL_USD, totalUsd) : 0;
+    const totalKhr = Math.round(billableTotalUsd * Number(menu.exchangeRateKhrPerUsd || 4100));
+    return { subtotalUsd, discountUsd, totalUsd: billableTotalUsd, totalKhr };
   }, [cart, menu.exchangeRateKhrPerUsd, promoState.detail, promoState.status]);
 
   const visibleOrders = useMemo(() => {
@@ -192,12 +268,63 @@ export default function CustomerOrderingApp({ tableNumber }) {
     return orders.filter((order) => !deleted.has(order.id));
   }, [deletedOrderIds, orders]);
 
+  useEffect(() => {
+    if (visibleOrders.length === 0) return;
+
+    let cancelled = false;
+    async function refreshVisibleOrderStatuses() {
+      for (const order of visibleOrders) {
+        if (!order?.id) continue;
+        try {
+          const updated = await api(`/api/customer/orders/${order.id}`);
+          if (cancelled) return;
+          applyCustomerOrderUpdate(updated, { notify: true });
+        } catch {
+          // Status refresh is best-effort; the next poll will retry.
+        }
+      }
+    }
+
+    refreshVisibleOrderStatuses();
+    const timer = setInterval(refreshVisibleOrderStatuses, 6000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleOrders]);
+
   function secsRemaining(payment) {
     if (!payment?.expiredAt) return 0;
     return Math.max(0, Math.floor((new Date(payment.expiredAt).getTime() - now) / 1000));
   }
 
+  function applyCustomerOrderUpdate(updated, options = {}) {
+    if (!updated?.id) return;
+    const previousStatus = lastOrderStatusRef.current[updated.id];
+    if (updated.status) {
+      lastOrderStatusRef.current[updated.id] = updated.status;
+    }
+    setOrders((current) => {
+      const existing = current.find((order) => order.id === updated.id);
+      if (
+        existing &&
+        existing.status === updated.status &&
+        existing.updatedAt === updated.updatedAt &&
+        existing.totalUsd === updated.totalUsd &&
+        existing.totalKhr === updated.totalKhr
+      ) {
+        return current;
+      }
+      return upsertById(current, updated);
+    });
+    if (options.notify && previousStatus && updated.status && previousStatus !== updated.status) {
+      notifyOrderStatusChanged(updated);
+    }
+  }
+
   function addConfiguredItem(configured) {
+    unlockCustomerAlert();
     setCart((current) => [...current, { ...configured, cartId: crypto.randomUUID() }]);
     setActiveItem(null);
     showAddedToCartToast(configured);
@@ -253,6 +380,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
   async function submitOrder() {
     if (!cart.length || submitting || totals.totalUsd <= 0) return;
     setMessage("");
+    unlockCustomerAlert();
     setSubmitting(true);
     try {
       const payload = {
@@ -269,6 +397,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
         })),
       };
       const created = await api("/api/customer/orders", { method: "POST", body: JSON.stringify(payload) });
+      lastOrderStatusRef.current[created.id] = created.status;
       setOrders((prev) => upsertById(prev, created));
       setDeletedOrderIds((prev) => prev.filter((id) => id !== created.id));
       setCart([]);
@@ -294,6 +423,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
   async function openPaymentFor(orderId) {
     setMessage("");
+    unlockCustomerAlert();
     const payment = payments[orderId];
     const isExpired = payment?.status === "EXPIRED" || (payment?.status === "PENDING" && secsRemaining(payment) === 0);
     if (!payment || isExpired) {
@@ -315,6 +445,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
       const verified = await api(`/api/payments/${payment.id}/verify`, { method: "POST" });
       setPayments((prev) => ({ ...prev, [orderId]: verified }));
       if (verified.status === "PAID") {
+        lastOrderStatusRef.current[orderId] = "RECEIVED";
         setOrders((prev) => prev.map((order) => order.id === orderId ? { ...order, status: "RECEIVED" } : order));
         notifyPaymentReceived(orderId);
       }
@@ -326,6 +457,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
     setMessage("");
     try {
       const cancelled = await api(`/api/customer/orders/${orderId}/cancel`, { method: "PATCH" });
+      lastOrderStatusRef.current[orderId] = cancelled.status;
       setOrders((prev) => upsertById(prev, cancelled));
       setPayments((prev) => {
         const current = prev[orderId];
@@ -340,6 +472,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
   function deleteLocalOrder(orderId) {
     setDeletedOrderIds((prev) => prev.includes(orderId) ? prev : [...prev, orderId]);
+    delete lastOrderStatusRef.current[orderId];
     setPayments((prev) => {
       if (!prev[orderId]) return prev;
       const next = { ...prev };
@@ -364,6 +497,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const openModalOrder = openPaymentOrderId ? visibleOrders.find((o) => o.id === openPaymentOrderId) : null;
   const openModalPayment = openPaymentOrderId ? payments[openPaymentOrderId] : null;
   const isPaymentMessage = message === t("paymentReceived") || message.startsWith("Payment received");
+  const tableLabel = customerTableLabel(table, tableNumber, t);
 
   return (
     <main className="min-h-screen bg-background pb-24 lg:pb-0">
@@ -383,7 +517,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
             </div>
             <div>
               <h1 className="text-lg font-bold leading-tight tracking-tight">HappyBoat</h1>
-              <p className="text-xs text-muted-foreground">{table?.label || `Table ${tableNumber}`}</p>
+              <p className="text-xs text-muted-foreground">{tableLabel}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -391,7 +525,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
             <ThemeToggle />
             <div className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-3 text-sm font-semibold">
               <Utensils className="h-3.5 w-3.5 text-primary" />
-              {tableNumber}
+              {table?.tableNumber || tableLabel}
             </div>
           </div>
         </div>
@@ -689,12 +823,13 @@ export default function CustomerOrderingApp({ tableNumber }) {
                   </span>
                 </div>
                 <CardContent className="space-y-3 p-4">
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-base font-bold">{displayUsd(order.totalUsd)}</span>
-                    <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
-                  </div>
+	                  <div className="flex items-baseline gap-2">
+	                    <span className="text-base font-bold">{displayUsd(order.totalUsd)}</span>
+	                    <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
+	                  </div>
+	                  <CustomerOrderProgress status={order.status} />
 
-                  {isCancelled ? (
+	                  {isCancelled ? (
                     <>
                       <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
                         {t("orderCancelled")}
@@ -1140,11 +1275,12 @@ function MobileCartSheet({
                       </span>
                     </div>
                     <div className="space-y-3 p-4">
-                      <div className="flex items-baseline gap-2">
-                        <span className="text-base font-bold">{displayUsd(order.totalUsd)}</span>
-                        <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
-                      </div>
-                      {isCancelled ? (
+	                      <div className="flex items-baseline gap-2">
+	                        <span className="text-base font-bold">{displayUsd(order.totalUsd)}</span>
+	                        <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
+	                      </div>
+	                      <CustomerOrderProgress status={order.status} />
+	                      {isCancelled ? (
                         <>
                           <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
                             {t("orderCancelled")}
@@ -1203,6 +1339,49 @@ function MobileCartSheet({
           ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+function CustomerOrderProgress({ status }) {
+  const { t } = useLanguage();
+  const steps = [
+    { status: "PENDING_PAYMENT", label: t("awaitingPayment") },
+    { status: "RECEIVED", label: t("receivedByStaff") },
+    { status: "PREPARING", label: t("acceptedPreparing") },
+    { status: "READY", label: t("readyForPickup") },
+    { status: "COMPLETED", label: t("orderComplete") },
+  ];
+  const activeIndex = customerStatusStepIndex(status);
+
+  if (["CANCELLED", "REJECTED", "EXPIRED"].includes(status)) {
+    return (
+      <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs font-medium text-destructive">
+        {customerStatusLabel(status, t)}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+      {steps.map((step, index) => {
+        const done = activeIndex >= index;
+        const current = activeIndex === index;
+        return (
+          <div
+            key={step.status}
+            className={cn(
+              "min-w-[68px] rounded-lg border px-2 py-1.5 text-center text-[10px] font-semibold",
+              done
+                ? "border-primary/30 bg-primary/10 text-primary"
+                : "border-border bg-muted/30 text-muted-foreground",
+              current ? "ring-1 ring-primary/30" : ""
+            )}
+          >
+            {step.label}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1562,6 +1741,63 @@ function priceMatches(item, filter) {
   }
 }
 
+function customerTableLabel(table, tableNumber, t) {
+  const label = String(table?.label || "").trim();
+  if (label && label !== "undefined" && label !== "null") return label;
+  const fromTable = table?.tableNumber;
+  let fallback = String(tableNumber || "").trim();
+  try {
+    fallback = decodeURIComponent(fallback);
+  } catch {
+    // Keep the raw route value if it is not URI-encoded cleanly.
+  }
+  const value = String(fromTable || fallback).trim();
+  if (!value || value === "undefined" || value === "null") return "";
+  return value.toLowerCase().startsWith("table ") ? value : `${t("table")} ${value}`;
+}
+
+function customerStatusStepIndex(status) {
+  switch (status) {
+    case "PENDING_PAYMENT":
+      return 0;
+    case "PAID":
+    case "RECEIVED":
+      return 1;
+    case "PREPARING":
+      return 2;
+    case "READY":
+      return 3;
+    case "COMPLETED":
+      return 4;
+    default:
+      return -1;
+  }
+}
+
+function customerStatusLabel(status, t) {
+  switch (status) {
+    case "PENDING_PAYMENT":
+      return t("awaitingPayment");
+    case "PAID":
+    case "RECEIVED":
+      return t("receivedByStaff");
+    case "PREPARING":
+      return t("acceptedPreparing");
+    case "READY":
+      return t("readyForPickup");
+    case "COMPLETED":
+      return t("orderComplete");
+    case "CANCELLED":
+      return t("cancelled");
+    case "REJECTED":
+      return t("rejected");
+    case "EXPIRED":
+      return t("expired");
+    default:
+      return status || "-";
+  }
+}
+
 function isPromoCodeError(error, promoCode) {
   if (!promoCode?.trim()) return false;
   const text = String(error?.message || "").toLowerCase();
@@ -1576,7 +1812,8 @@ function promoDiscountForSubtotal(promo, subtotalUsd) {
   const cappedDiscount = promo.discountType === "PERCENT" && promo.maxDiscountUsd != null
     ? Math.min(rawDiscount, Number(promo.maxDiscountUsd || 0))
     : rawDiscount;
-  return Math.min(subtotal, Math.max(0, Number(cappedDiscount.toFixed(2))));
+  const maxDiscount = subtotal > 0 ? Math.max(0, subtotal - MIN_CART_TOTAL_USD) : subtotal;
+  return Math.min(maxDiscount, Math.max(0, Number(cappedDiscount.toFixed(2))));
 }
 
 function formatPromoValue(promo) {
