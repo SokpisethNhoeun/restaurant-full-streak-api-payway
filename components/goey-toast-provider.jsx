@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { GooeyToaster } from "goey-toast";
+import { useEffect, useState } from "react";
 
 export function GoeyToastProvider() {
   const [theme, setTheme] = useState("light");
@@ -26,6 +26,7 @@ export function GoeyToastProvider() {
       gap={16}
       offset="16px"
       visibleToasts={4}
+      duration={4000}
     />
   );
 }

@@ -24,6 +24,7 @@ const PRICE_FILTERS = [
 
 const CUSTOMER_STORAGE_TTL_MS = 12 * 60 * 60 * 1000;
 const MIN_CART_TOTAL_USD = 0.01;
+const CUSTOMER_ALERT_AFTER_MS = 10 * 60 * 1000;
 
 export default function CustomerOrderingApp({ tableNumber }) {
   const { t } = useLanguage();
@@ -41,6 +42,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const [orders, setOrders] = useState([]);
   const [payments, setPayments] = useState({});
   const [deletedOrderIds, setDeletedOrderIds] = useState([]);
+  const [alertedOrderIds, setAlertedOrderIds] = useState([]);
   const [loadedStorageScope, setLoadedStorageScope] = useState("");
   const [openPaymentOrderId, setOpenPaymentOrderId] = useState(null);
 
@@ -48,6 +50,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [alertingOrderId, setAlertingOrderId] = useState(null);
 
   const pollingInFlight = useRef({});
   const paidToastShown = useRef({});
@@ -61,6 +64,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
     orders: customerStorageKey(tableNumber, "orders"),
     payments: customerStorageKey(tableNumber, "payments"),
     deletedOrders: customerStorageKey(tableNumber, "deleted-orders"),
+    alertedOrders: customerStorageKey(tableNumber, "alerted-orders"),
   }), [tableNumber]);
 
   const unlockCustomerAlert = useCallback(() => {
@@ -120,13 +124,17 @@ export default function CustomerOrderingApp({ tableNumber }) {
   }, []);
 
   const showAddedToCartToast = useCallback((item) => {
+    const toastId = "customer-cart-added";
     gooeyToast.success(t("addedToCartTitle"), goeyToastOptions({
+      id: toastId,
       description: `${item.name} · ${t("quantity")}: ${item.quantity}`,
       icon: <ShoppingBag className="h-4 w-4" />,
       action: {
         label: t("viewCart"),
-        onClick: () => setCartOpen(true),
-        successLabel: t("opened"),
+        onClick: () => {
+          setCartOpen(true);
+          gooeyToast.dismiss(toastId);
+        },
       },
     }));
   }, [t]);
@@ -145,6 +153,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
     setMessage(`${t("orderStatusUpdated")}: ${statusText}`);
     playCustomerAlert();
     gooeyToast.info(t("orderStatusUpdated"), goeyToastOptions({
+      id: `customer-order-status-${order.id || order.orderNumber || "latest"}`,
       description: `${order.orderNumber || t("order")} · ${statusText}`,
       icon: <Clock className="h-4 w-4" />,
     }));
@@ -156,11 +165,12 @@ export default function CustomerOrderingApp({ tableNumber }) {
     setOrders(readCustomerStorage(storageKeys.orders, []));
     setPayments(readCustomerStorage(storageKeys.payments, {}));
     setDeletedOrderIds(readCustomerStorage(storageKeys.deletedOrders, []));
+    setAlertedOrderIds(readCustomerStorage(storageKeys.alertedOrders, []));
     paidToastShown.current = {};
     lastOrderStatusRef.current = {};
     setOpenPaymentOrderId(null);
     setLoadedStorageScope(storageKeys.cart);
-  }, [storageKeys.cart, storageKeys.deletedOrders, storageKeys.orders, storageKeys.payments]);
+  }, [storageKeys.alertedOrders, storageKeys.cart, storageKeys.deletedOrders, storageKeys.orders, storageKeys.payments]);
 
   useEffect(() => {
     orders.forEach((order) => {
@@ -176,7 +186,8 @@ export default function CustomerOrderingApp({ tableNumber }) {
     writeCustomerStorage(storageKeys.orders, orders);
     writeCustomerStorage(storageKeys.payments, payments);
     writeCustomerStorage(storageKeys.deletedOrders, deletedOrderIds);
-  }, [cart, deletedOrderIds, loadedStorageScope, orders, payments, storageKeys.cart, storageKeys.deletedOrders, storageKeys.orders, storageKeys.payments]);
+    writeCustomerStorage(storageKeys.alertedOrders, alertedOrderIds);
+  }, [alertedOrderIds, cart, deletedOrderIds, loadedStorageScope, orders, payments, storageKeys.alertedOrders, storageKeys.cart, storageKeys.deletedOrders, storageKeys.orders, storageKeys.payments]);
 
   useEffect(() => {
     async function load() {
@@ -204,6 +215,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
     if (!tableLabel) return;
     welcomeToastShown.current = true;
     gooeyToast.info(t("welcomeTitle"), goeyToastOptions({
+      id: `customer-welcome-${tableNumber}`,
       description: `${t("youAreAtTable")} ${tableLabel}`,
       icon: <Utensils className="h-4 w-4" />,
     }));
@@ -221,7 +233,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
           setPayments((prev) => ({ ...prev, [orderId]: verified }));
           if (verified.status === "PAID") {
             lastOrderStatusRef.current[orderId] = "RECEIVED";
-            setOrders((prev) => prev.map((order) => order.id === orderId ? { ...order, status: "RECEIVED" } : order));
+            setOrders((prev) => prev.map((order) => order.id === orderId ? { ...order, status: "RECEIVED", paidAt: verified.paidAt || new Date().toISOString() } : order));
             notifyPaymentReceived(orderId);
           }
         } catch {}
@@ -233,10 +245,11 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
   useEffect(() => {
     const hasPending = Object.values(payments).some((p) => p && p.status === "PENDING");
-    if (!hasPending) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const hasPaidKitchenOrder = orders.some((order) => canRequestStaffAlert(order, Date.now(), { ignoreAge: true }));
+    if (!hasPending && !hasPaidKitchenOrder) return;
+    const timer = setInterval(() => setNow(Date.now()), hasPending ? 1000 : 30000);
     return () => clearInterval(timer);
-  }, [payments]);
+  }, [orders, payments]);
 
   const filteredItems = useMemo(() => {
     return menu.items.filter((item) => {
@@ -425,8 +438,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
     setMessage("");
     unlockCustomerAlert();
     const payment = payments[orderId];
-    const isExpired = payment?.status === "EXPIRED" || (payment?.status === "PENDING" && secsRemaining(payment) === 0);
-    if (!payment || isExpired) {
+    if (!payment) {
       try {
         const created = await api(`/api/payments/orders/${orderId}/khqr`, { method: "POST" });
         setPayments((prev) => ({ ...prev, [orderId]: created }));
@@ -446,7 +458,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
       setPayments((prev) => ({ ...prev, [orderId]: verified }));
       if (verified.status === "PAID") {
         lastOrderStatusRef.current[orderId] = "RECEIVED";
-        setOrders((prev) => prev.map((order) => order.id === orderId ? { ...order, status: "RECEIVED" } : order));
+        setOrders((prev) => prev.map((order) => order.id === orderId ? { ...order, status: "RECEIVED", paidAt: verified.paidAt || new Date().toISOString() } : order));
         notifyPaymentReceived(orderId);
       }
     } catch {}
@@ -472,6 +484,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
   function deleteLocalOrder(orderId) {
     setDeletedOrderIds((prev) => prev.includes(orderId) ? prev : [...prev, orderId]);
+    setAlertedOrderIds((prev) => prev.filter((id) => id !== orderId));
     delete lastOrderStatusRef.current[orderId];
     setPayments((prev) => {
       if (!prev[orderId]) return prev;
@@ -481,6 +494,23 @@ export default function CustomerOrderingApp({ tableNumber }) {
     });
     setOpenPaymentOrderId((current) => current === orderId ? null : current);
     showToast(t("orderDeleted"));
+  }
+
+  async function alertStaffFor(orderId) {
+    if (!orderId) return;
+    const order = orders.find((entry) => entry.id === orderId);
+    if (!canRequestStaffAlert(order, now) || alertedOrderIds.includes(orderId)) return;
+    setMessage("");
+    setAlertingOrderId(orderId);
+    try {
+      await api(`/api/customer/orders/${orderId}/alert`, { method: "POST" });
+      setAlertedOrderIds((prev) => prev.includes(orderId) ? prev : [...prev, orderId]);
+      showToast(t("customerAlertSent"));
+    } catch (error) {
+      showToast(error.message || t("customerAlertFailed"), "error");
+    } finally {
+      setAlertingOrderId(null);
+    }
   }
 
   if (loading) {
@@ -795,22 +825,27 @@ export default function CustomerOrderingApp({ tableNumber }) {
             const secs = secsRemaining(payment);
             const isCancelled = order.status === "CANCELLED" || payment?.status === "FAILED";
             const isPaid = !isCancelled && (payment?.status === "PAID" || ["PAID", "RECEIVED", "PREPARING", "READY", "COMPLETED"].includes(order.status));
+            const isReceived = order.status === "RECEIVED";
             const isExpired = order.status === "EXPIRED" || payment?.status === "EXPIRED" || (payment?.status === "PENDING" && secs === 0);
+            const canAlertStaff = canRequestStaffAlert(order, now);
+            const staffAlertSent = alertedOrderIds.includes(order.id);
 
             return (
               <Card key={order.id} className="overflow-hidden rounded-2xl border-border/60 shadow-sm">
-                <div className={cn(
-                  "flex items-center justify-between border-b border-border/60 px-4 py-2.5",
-                  isPaid ? "bg-primary/6" : "bg-muted/30"
-                )}>
+	                <div className={cn(
+	                  "flex items-center justify-between border-b border-border/60 px-4 py-2.5",
+	                  isReceived ? "bg-accent/8" : isPaid ? "bg-primary/6" : "bg-muted/30"
+	                )}>
                   <div>
                     <p className="text-sm font-bold">{order.orderNumber}</p>
                     <p className="text-xs text-muted-foreground capitalize">{order.status?.toLowerCase()}</p>
                   </div>
                   <span className={cn(
                     "rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide",
-                    isPaid
-                      ? "bg-primary/15 text-primary"
+	                    isReceived
+	                      ? "bg-accent/15 text-accent"
+	                      : isPaid
+	                      ? "bg-primary/15 text-primary"
                       : isCancelled
                       ? "bg-destructive/10 text-destructive"
                       : isExpired
@@ -819,7 +854,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                       ? "bg-secondary/20 text-secondary-foreground"
                       : "bg-muted text-muted-foreground"
                   )}>
-                    {isPaid ? t("paid") : isCancelled ? t("cancelled") : isExpired ? t("expired") : payment ? t("pending") : t("unpaid")}
+	                    {isReceived ? t("receivedByStaff") : isPaid ? t("paid") : isCancelled ? t("cancelled") : isExpired ? t("expired") : payment ? t("pending") : t("unpaid")}
                   </span>
                 </div>
                 <CardContent className="space-y-3 p-4">
@@ -843,12 +878,27 @@ export default function CustomerOrderingApp({ tableNumber }) {
                         {t("deleteOrder")}
                       </Button>
                     </>
-                  ) : isPaid ? (
+	                  ) : isPaid ? (
                     <>
                       <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/8 px-3 py-2.5 text-xs font-medium text-primary">
                         <CheckCircle2 className="h-4 w-4 shrink-0" />
                         {t("paymentConfirmed")}
                       </div>
+                      <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/8 px-3 py-2 text-xs font-medium text-primary">
+                        <Clock className="h-3.5 w-3.5 shrink-0" />
+                        {t("paidMinutes")} {paidWaitingMinutes(order, payment, now)}m
+                      </div>
+                      {(canAlertStaff || staffAlertSent) ? (
+                        <Button
+                          className="h-9 w-full rounded-xl text-sm"
+                          variant="secondary"
+                          disabled={staffAlertSent || alertingOrderId === order.id}
+                          onClick={() => alertStaffFor(order.id)}
+                        >
+                          <AlertCircle className="h-3.5 w-3.5" />
+                          {staffAlertSent ? t("customerAlertSentShort") : alertingOrderId === order.id ? t("checking") : t("alertStaff")}
+                        </Button>
+                      ) : null}
                       <a
                         href={`${API_BASE}/api/receipts/orders/${order.id}.pdf`}
                         target="_blank"
@@ -878,7 +928,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                           onClick={() => openPaymentFor(order.id)}
                         >
                           <Zap className="h-3.5 w-3.5" />
-                          {payment && !isExpired ? t("viewPaymentQr") : t("payWithBakong")}
+                          {payment ? t("viewPayment") : t("payWithBakong")}
                         </Button>
                         <Button
                           className="h-9 w-full rounded-xl text-sm"
@@ -949,6 +999,10 @@ export default function CustomerOrderingApp({ tableNumber }) {
           onOpenPayment={openPaymentFor}
           onCancelPayment={cancelPaymentFor}
           onDeleteOrder={deleteLocalOrder}
+          onAlertStaff={alertStaffFor}
+          alertingOrderId={alertingOrderId}
+          alertedOrderIds={alertedOrderIds}
+          now={now}
           onClose={() => setCartOpen(false)}
         />
       ) : null}
@@ -1086,6 +1140,10 @@ function MobileCartSheet({
   onOpenPayment,
   onCancelPayment,
   onDeleteOrder,
+  onAlertStaff,
+  alertingOrderId,
+  alertedOrderIds,
+  now,
   onClose,
 }) {
   const { t } = useLanguage();
@@ -1248,21 +1306,26 @@ function MobileCartSheet({
                 const secs = secsRemaining(payment);
                 const isCancelled = order.status === "CANCELLED" || payment?.status === "FAILED";
                 const isPaid = !isCancelled && (payment?.status === "PAID" || ["PAID", "RECEIVED", "PREPARING", "READY", "COMPLETED"].includes(order.status));
+                const isReceived = order.status === "RECEIVED";
                 const isExpired = order.status === "EXPIRED" || payment?.status === "EXPIRED" || (payment?.status === "PENDING" && secs === 0);
+                const canAlertStaff = canRequestStaffAlert(order, now);
+                const staffAlertSent = alertedOrderIds.includes(order.id);
                 return (
                   <div key={order.id} className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
-                    <div className={cn(
-                      "flex items-center justify-between border-b border-border/60 px-4 py-2.5",
-                      isPaid ? "bg-primary/6" : "bg-muted/30"
-                    )}>
+		                    <div className={cn(
+		                      "flex items-center justify-between border-b border-border/60 px-4 py-2.5",
+		                      isReceived ? "bg-accent/8" : isPaid ? "bg-primary/6" : "bg-muted/30"
+	                    )}>
                       <div>
                         <p className="text-sm font-bold">{order.orderNumber}</p>
                         <p className="text-xs text-muted-foreground capitalize">{order.status?.toLowerCase()}</p>
                       </div>
                       <span className={cn(
                         "rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide",
-                        isPaid
-                          ? "bg-primary/15 text-primary"
+	                        isReceived
+	                          ? "bg-accent/15 text-accent"
+	                          : isPaid
+	                          ? "bg-primary/15 text-primary"
                           : isCancelled
                           ? "bg-destructive/10 text-destructive"
                           : isExpired
@@ -1271,7 +1334,7 @@ function MobileCartSheet({
                           ? "bg-secondary/20 text-secondary-foreground"
                           : "bg-muted text-muted-foreground"
                       )}>
-                        {isPaid ? t("paid") : isCancelled ? t("cancelled") : isExpired ? t("expired") : payment ? t("pending") : t("unpaid")}
+	                        {isReceived ? t("receivedByStaff") : isPaid ? t("paid") : isCancelled ? t("cancelled") : isExpired ? t("expired") : payment ? t("pending") : t("unpaid")}
                       </span>
                     </div>
                     <div className="space-y-3 p-4">
@@ -1294,15 +1357,32 @@ function MobileCartSheet({
                             {t("deleteOrder")}
                           </Button>
                         </>
-                      ) : isPaid ? (
-                        <a
-                          href={`${API_BASE}/api/receipts/orders/${order.id}.pdf`}
-                          target="_blank"
-                          className="flex items-center justify-center gap-1.5 text-sm font-medium text-primary hover:underline"
-                        >
-                          {t("openReceipt")}
-                          <ChevronRight className="h-3.5 w-3.5" />
-                        </a>
+	                      ) : isPaid ? (
+                        <div className="grid gap-2">
+                          <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/8 px-3 py-2 text-xs font-medium text-primary">
+                            <Clock className="h-3.5 w-3.5 shrink-0" />
+                            {t("paidMinutes")} {paidWaitingMinutes(order, payment, now)}m
+                          </div>
+                          {(canAlertStaff || staffAlertSent) ? (
+                            <Button
+                              className="h-9 w-full rounded-xl text-sm"
+                              variant="secondary"
+                              disabled={staffAlertSent || alertingOrderId === order.id}
+                              onClick={() => onAlertStaff(order.id)}
+                            >
+                              <AlertCircle className="h-3.5 w-3.5" />
+                              {staffAlertSent ? t("customerAlertSentShort") : alertingOrderId === order.id ? t("checking") : t("alertStaff")}
+                            </Button>
+                          ) : null}
+                          <a
+                            href={`${API_BASE}/api/receipts/orders/${order.id}.pdf`}
+                            target="_blank"
+                            className="flex items-center justify-center gap-1.5 text-sm font-medium text-primary hover:underline"
+                          >
+                            {t("openReceipt")}
+                            <ChevronRight className="h-3.5 w-3.5" />
+                          </a>
+                        </div>
                       ) : (
                         <div className="grid gap-2">
                           {isExpired ? (
@@ -1319,7 +1399,7 @@ function MobileCartSheet({
                             }}
                           >
                             <Zap className="h-3.5 w-3.5" />
-                            {payment && !isExpired ? t("viewPaymentQr") : t("payWithBakong")}
+                            {payment ? t("viewPayment") : t("payWithBakong")}
                           </Button>
                           <Button
                             className="h-9 w-full rounded-xl text-sm"
@@ -1398,7 +1478,7 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
         {/* Modal header */}
         <div className="flex items-start justify-between gap-4 border-b border-border/60 p-5">
           <div>
-            <h2 className="text-lg font-bold">{isPaid ? t("paymentReceived") : t("scanToPay")}</h2>
+            <h2 className="text-lg font-bold">{isPaid ? t("paymentReceived") : isExpired ? t("paymentExpired") : t("scanToPay")}</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {order?.orderNumber} · {payment.paymentNumber}
             </p>
@@ -1413,13 +1493,17 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
         </div>
 
         <div className="space-y-4 p-5 text-center">
-          {!isPaid ? (
+          {!isPaid && !isExpired ? (
             <div className="mx-auto inline-flex rounded-2xl border border-border bg-white p-4 shadow-sm" data-payment-qr={payment.id}>
               <QRCodeSVG value={payment.khqrString} size={220} includeMargin level="M" />
             </div>
-          ) : (
+          ) : isPaid ? (
             <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-full bg-primary/10">
               <CheckCircle2 className="h-12 w-12 text-primary" />
+            </div>
+          ) : (
+            <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-full bg-destructive/10">
+              <AlertCircle className="h-12 w-12 text-destructive" />
             </div>
           )}
 
@@ -1470,7 +1554,17 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
                 {t("cancelPayment")}
               </Button>
             </div>
-          ) : null}
+          ) : (
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button type="button" variant="outline" className="h-10 rounded-xl text-sm" onClick={onRefresh}>
+                {t("checkPaymentStatus")}
+              </Button>
+              <Button type="button" variant="outline" className="h-10 rounded-xl text-sm" onClick={onCancel}>
+                <X className="h-4 w-4" />
+                {t("cancelPayment")}
+              </Button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1804,6 +1898,22 @@ function isPromoCodeError(error, promoCode) {
   return text.includes("promo") || text.includes("bad request") || text.includes("400");
 }
 
+function canRequestStaffAlert(order, now = Date.now(), options = {}) {
+  if (!["PAID", "RECEIVED", "PREPARING"].includes(order?.status)) return false;
+  if (options.ignoreAge) return true;
+  const baseValue = order.paidAt || order.createdAt;
+  const baseTime = new Date(baseValue).getTime();
+  if (!baseValue || Number.isNaN(baseTime)) return false;
+  return now - baseTime >= CUSTOMER_ALERT_AFTER_MS;
+}
+
+function paidWaitingMinutes(order, payment, now = Date.now()) {
+  const baseValue = payment?.paidAt || order?.paidAt || order?.createdAt;
+  const baseTime = new Date(baseValue).getTime();
+  if (!baseValue || Number.isNaN(baseTime)) return 0;
+  return Math.max(0, Math.floor((now - baseTime) / 60000));
+}
+
 function promoDiscountForSubtotal(promo, subtotalUsd) {
   if (!promo) return 0;
   const subtotal = Number(subtotalUsd || 0);
@@ -1831,40 +1941,64 @@ function downloadPaymentQrImage(order, payment) {
 
   const svgText = new XMLSerializer().serializeToString(svg);
   const svgUrl = URL.createObjectURL(new Blob([svgText], { type: "image/svg+xml;charset=utf-8" }));
-  const image = new Image();
-  image.onload = () => {
+  Promise.all([
+    loadCanvasImage(svgUrl),
+    loadCanvasImage("/logo.png").catch(() => null)
+  ]).then(([qrImage, logoImage]) => {
     const canvas = document.createElement("canvas");
-    canvas.width = 360;
-    canvas.height = 430;
+    canvas.width = 400;
+    canvas.height = 500;
     const ctx = canvas.getContext("2d");
     if (!ctx) {
       URL.revokeObjectURL(svgUrl);
       return;
     }
+
+    const tableText = order?.tableNumber ? `Table ${order.tableNumber}` : "";
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (logoImage) {
+      ctx.drawImage(logoImage, canvas.width / 2 - 28, 24, 56, 56);
+    }
+
     ctx.fillStyle = "#111827";
     ctx.font = "700 20px sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("HappyBoat KHQR", canvas.width / 2, 42);
+    ctx.fillText("HappyBoat KHQR", canvas.width / 2, logoImage ? 105 : 44);
+
     ctx.font = "500 13px sans-serif";
     ctx.fillStyle = "#4b5563";
-    ctx.fillText(`${order?.orderNumber || "Order"} · ${payment.paymentNumber}`, canvas.width / 2, 67);
-    ctx.drawImage(image, 70, 92, 220, 220);
+    ctx.fillText(
+      [tableText, order?.orderNumber || "Order", payment.paymentNumber].filter(Boolean).join(" · "),
+      canvas.width / 2,
+      logoImage ? 130 : 69
+    );
+
+    ctx.drawImage(qrImage, 76, 154, 248, 248);
+
     ctx.font = "700 18px sans-serif";
     ctx.fillStyle = "#111827";
-    ctx.fillText(displayUsd(payment.amountUsd), canvas.width / 2, 345);
+    ctx.fillText(displayUsd(payment.amountUsd), canvas.width / 2, 430);
     ctx.font = "500 13px sans-serif";
     ctx.fillStyle = "#4b5563";
-    ctx.fillText(khr(payment.amountKhr), canvas.width / 2, 368);
+    ctx.fillText(khr(payment.amountKhr), canvas.width / 2, 454);
+
     canvas.toBlob(async (blob) => {
       URL.revokeObjectURL(svgUrl);
       if (!blob) return;
       await saveImageToPhonePhotos(blob, `${order?.orderNumber || payment.paymentNumber}-khqr.png`);
     }, "image/png");
-  };
-  image.onerror = () => URL.revokeObjectURL(svgUrl);
-  image.src = svgUrl;
+  }).catch(() => URL.revokeObjectURL(svgUrl));
+}
+
+function loadCanvasImage(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
 }
 
 async function saveImageToPhonePhotos(blob, filename) {

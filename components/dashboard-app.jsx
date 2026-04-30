@@ -1,24 +1,25 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Client } from "@stomp/stompjs";
-import SockJS from "sockjs-client";
-import { QRCodeSVG } from "qrcode.react";
-import { gooeyToast } from "goey-toast";
-import {
-  ArrowUpDown, BadgePercent, BarChart3, CalendarDays, Check, Clock, CreditCard,
-  Download, Filter, LogIn, Pencil, Printer, RefreshCw, Search,
-  Table2, Upload, Utensils, Volume2, VolumeX, Wifi, WifiOff, X
-} from "lucide-react";
+import { LanguageToggle, useLanguage } from "@/components/language-provider";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import AnalyticsLineChart from "./analytics-line-chart";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input, Select, Textarea } from "@/components/ui/input";
 import { api, API_BASE, WS_URL } from "@/lib/api";
 import { goeyToastOptions } from "@/lib/goey-toast-options";
 import { displayUsd, khr, tags, usd } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input, Select, Textarea } from "@/components/ui/input";
-import { LanguageToggle, useLanguage } from "@/components/language-provider";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { Client } from "@stomp/stompjs";
+import { gooeyToast } from "goey-toast";
+import {
+  ArrowUpDown, BadgePercent, BarChart3, BellRing, CalendarDays, Check, Clock, CreditCard,
+  Download, Filter, LogIn, Pencil, Printer, RefreshCw, Search,
+  Table2, Upload, Utensils, Volume2, VolumeX, Wifi, WifiOff, X
+} from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import SockJS from "sockjs-client";
 
 const NEXT_STATUS = {
   PAID: "RECEIVED",
@@ -40,14 +41,30 @@ const SORT_OPTIONS = [
 
 const PAYMENT_FILTERS = [
   { value: "",       labelKey: "allPayments" },
-  { value: "PAID",   label: "Paid" },
-  { value: "PENDING","label": "Pending" },
-  { value: "UNPAID", label: "Unpaid (no QR)" },
-  { value: "EXPIRED","label": "Expired" }
+  { value: "PAID",   labelKey: "paid" },
+  { value: "PENDING", labelKey: "pending" },
+  { value: "UNPAID", labelKey: "unpaidNoQr" },
+  { value: "EXPIRED", labelKey: "expired" }
+];
+
+const ORDER_STATUS_FILTERS = [
+  { value: "", labelKey: "allStatuses" },
+  { value: "PENDING_PAYMENT", labelKey: "awaitingPayment" },
+  { value: "PAID", labelKey: "paid" },
+  { value: "RECEIVED", labelKey: "receivedByStaff" },
+  { value: "PREPARING", labelKey: "preparing" },
+  { value: "READY", labelKey: "readyForPickup" },
+  { value: "COMPLETED", labelKey: "completed" },
+  { value: "CANCELLED", labelKey: "cancelled" },
+  { value: "REJECTED", labelKey: "rejected" },
+  { value: "EXPIRED", labelKey: "expired" }
 ];
 
 const DASHBOARD_SESSION_HINT = "happyboat-dashboard-session";
 const DASHBOARD_TOKEN_KEY = "happyboat-dashboard-token";
+const DASHBOARD_SOUND_READY_KEY = "happyboat-dashboard-sound-ready";
+const DASHBOARD_LANGUAGE_KEY = "happyboat-language";
+const ORDER_ATTENTION_MS = 10 * 60 * 1000;
 const DONUT_COLORS = ["#0f8a7f", "#f59e0b", "#2563eb", "#dc2626", "#7c3aed", "#059669"];
 
 function readDashboardToken() {
@@ -79,14 +96,19 @@ export default function DashboardApp() {
   const [payments, setPayments] = useState([]);
   const [promos, setPromos] = useState([]);
   const [analytics, setAnalytics] = useState(null);
+  const [analyticsError, setAnalyticsError] = useState("");
   const [message, setMessage] = useState("");
   const [liveState, setLiveState] = useState("offline");
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
   const [soundReady, setSoundReady] = useState(false);
+  const [dashboardNow, setDashboardNow] = useState(Date.now());
   const audioRef = useRef(null);
   const ordersRef = useRef([]);
+  const paymentsRef = useRef([]);
   const selectedOrderRef = useRef(null);
   const notifiedOrderToastRef = useRef(new Set());
+  const notifiedPaymentToastRef = useRef(new Set());
+  const notifiedCustomerAlertRef = useRef(new Set());
 
   useEffect(() => {
     ordersRef.current = orders;
@@ -97,8 +119,13 @@ export default function DashboardApp() {
   }, [selectedOrder]);
 
   useEffect(() => {
+    paymentsRef.current = payments;
+  }, [payments]);
+
+  useEffect(() => {
     const hasSessionHint = window.localStorage.getItem(DASHBOARD_SESSION_HINT) === "1";
     if (!hasSessionHint && !readDashboardToken()) return;
+    setSoundReady(window.localStorage.getItem(DASHBOARD_SOUND_READY_KEY) === "1");
 
     let mounted = true;
     fetch(`${API_BASE}/api/admin/auth/session`, {
@@ -132,9 +159,20 @@ export default function DashboardApp() {
           const order = JSON.parse(frame.body);
           applyLiveOrder(order);
         });
-        client.subscribe("/topic/payments", () => {
-          loadPayments();
+        client.subscribe("/topic/payments", (frame) => {
+          try {
+            applyLivePayment(JSON.parse(frame.body));
+          } catch {
+            loadPayments({ notifyNew: true });
+          }
           loadOrders();
+        });
+        client.subscribe("/topic/order-alerts", (frame) => {
+          try {
+            applyCustomerAlert(JSON.parse(frame.body));
+          } catch {
+            loadOrders();
+          }
         });
       },
       onWebSocketClose: () => setLiveState("polling"),
@@ -153,6 +191,12 @@ export default function DashboardApp() {
       client.deactivate();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signedIn]);
+
+  useEffect(() => {
+    if (!signedIn) return undefined;
+    const timer = window.setInterval(() => setDashboardNow(Date.now()), 30000);
+    return () => window.clearInterval(timer);
   }, [signedIn]);
 
   async function request(path, options = {}) {
@@ -196,7 +240,11 @@ export default function DashboardApp() {
   }
 
   async function loadAll() {
-    await Promise.all([loadOrders(), loadMenu(), loadTables(), loadPayments(), loadPromos(), loadAnalytics()]);
+    const results = await Promise.allSettled([loadOrders(), loadMenu(), loadTables(), loadPayments(), loadPromos(), loadAnalytics()]);
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) {
+      setMessage(failed.reason?.message || "Dashboard refresh failed");
+    }
     setLastUpdatedAt(new Date());
   }
   async function loadOrders(options = {}) {
@@ -212,22 +260,35 @@ export default function DashboardApp() {
   }
   async function loadMenu() { setMenu(await request("/api/admin/menu")); }
   async function loadTables() { setTables(await request("/api/admin/tables")); }
-  async function loadPayments() {
-    setPayments(await request("/api/admin/payments"));
+  async function loadPayments(options = {}) {
+    const data = await request("/api/admin/payments");
+    mergePayments(data, options);
     setLastUpdatedAt(new Date());
+    return data;
   }
   async function loadPromos() { setPromos(await request("/api/admin/promos")); }
-  async function loadAnalytics() { setAnalytics(await request("/api/admin/analytics/summary")); }
+  async function loadAnalytics() {
+    setAnalyticsError("");
+    try {
+      const data = await request("/api/admin/analytics/summary");
+      setAnalytics(data);
+      return data;
+    } catch (error) {
+      setAnalytics(null);
+      setAnalyticsError(formatApiError(error, t("analyticsLoadFailed")));
+      return null;
+    }
+  }
 
   async function pollLiveData() {
-    try {
-      await Promise.all([
-        loadOrders({ notifyNew: true }),
-        loadPayments(),
-        loadAnalytics()
-      ]);
-    } catch (error) {
-      setMessage(error.message || "Live refresh failed");
+    const results = await Promise.allSettled([
+      loadOrders({ notifyNew: true }),
+      loadPayments({ notifyNew: true }),
+      loadAnalytics()
+    ]);
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) {
+      setMessage(failed.reason?.message || "Live refresh failed");
     }
   }
 
@@ -235,14 +296,13 @@ export default function DashboardApp() {
     const previousById = new Map(ordersRef.current.map((order) => [order.id, order]));
     const alertOrder = Boolean(options.notifyNew) && nextOrders.find((order) => {
       const previous = previousById.get(order.id);
-      return (!previous && shouldNotifyOrder(order)) ||
-        (previous && previous.status !== order.status && order.status === "RECEIVED");
+      return shouldNotifyOrder(order) && (!previous || previous.status !== order.status);
     });
     ordersRef.current = nextOrders;
     setOrders(nextOrders);
     if (alertOrder) {
-      playSound();
-      notifyOrderToast(alertOrder);
+      const didNotify = notifyOrderToast(alertOrder);
+      if (didNotify) playSound(isPaidKitchenOrder(alertOrder) ? "payment" : "order");
     }
   }
 
@@ -255,9 +315,48 @@ export default function DashboardApp() {
     if (selectedOrderRef.current?.id === order.id) {
       setSelectedOrder((current) => current ? { ...current, ...order } : current);
     }
-    if ((!previous && shouldNotifyOrder(order)) || (previous && previous.status !== order.status && order.status === "RECEIVED")) {
-      playSound();
-      notifyOrderToast(order);
+    if (shouldNotifyOrder(order) && (!previous || previous.status !== order.status)) {
+      const didNotify = notifyOrderToast(order);
+      if (didNotify) playSound(isPaidKitchenOrder(order) ? "payment" : "order");
+    }
+  }
+
+  function applyCustomerAlert(orderAlert) {
+    if (orderAlert?.id) {
+      const nextOrders = upsertById(ordersRef.current, orderAlert);
+      ordersRef.current = nextOrders;
+      setOrders(nextOrders);
+      if (selectedOrderRef.current?.id === orderAlert.id) {
+        setSelectedOrder((current) => current ? { ...current, ...orderAlert } : current);
+      }
+    }
+    const didNotify = notifyCustomerAlertToast(orderAlert);
+    if (didNotify) playSound("rush");
+  }
+
+  function mergePayments(nextPayments, options = {}) {
+    const previousById = new Map(paymentsRef.current.map((payment) => [payment.id, payment]));
+    const alertPayment = Boolean(options.notifyNew) && nextPayments.find((payment) => {
+      const previous = previousById.get(payment.id);
+      return shouldNotifyPayment(payment) && (!previous || previous.status !== payment.status);
+    });
+    paymentsRef.current = nextPayments;
+    setPayments(nextPayments);
+    if (alertPayment) {
+      const didNotify = notifyPaymentToast(alertPayment);
+      if (didNotify) playSound("payment");
+    }
+  }
+
+  function applyLivePayment(payment) {
+    const previous = paymentsRef.current.find((entry) => entry.id === payment.id);
+    const nextPayments = upsertById(paymentsRef.current, payment);
+    paymentsRef.current = nextPayments;
+    setPayments(nextPayments);
+    setLastUpdatedAt(new Date());
+    if (shouldNotifyPayment(payment) && (!previous || previous.status !== payment.status)) {
+      const didNotify = notifyPaymentToast(payment);
+      if (didNotify) playSound("payment");
     }
   }
 
@@ -277,30 +376,32 @@ export default function DashboardApp() {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       audioRef.current = audioRef.current || new AudioContext();
       if (audioRef.current.state === "suspended") {
-        audioRef.current.resume().then(() => setSoundReady(true)).catch(() => setSoundReady(false));
+        audioRef.current.resume().then(() => markSoundReady(true)).catch(() => markSoundReady(false));
       } else {
-        setSoundReady(true);
+        markSoundReady(true);
       }
     } catch {
-      setSoundReady(false);
+      markSoundReady(false);
     }
   }
 
-  function playSound() {
+  function playSound(alertType = "order") {
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       const ctx = audioRef.current || new AudioContext();
       audioRef.current = ctx;
       const beep = () => {
         const now = ctx.currentTime;
-        const rings = [0, 0.18, 0.36, 0.78, 0.96, 1.14];
+        const rings = alertType === "rush"
+          ? [0, 0.14, 0.28, 0.62, 0.76, 0.9, 1.24, 1.38]
+          : [0, 0.18, 0.36, 0.78, 0.96, 1.14];
         rings.forEach((offset, index) => {
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
-          osc.type = "sine";
-          osc.frequency.setValueAtTime(index % 2 === 0 ? 1046 : 784, now + offset);
+          osc.type = alertType === "rush" ? "square" : "sine";
+          osc.frequency.setValueAtTime(index % 2 === 0 ? 1174 : 880, now + offset);
           gain.gain.setValueAtTime(0.0001, now + offset);
-          gain.gain.exponentialRampToValueAtTime(0.12, now + offset + 0.018);
+          gain.gain.exponentialRampToValueAtTime(alertType === "rush" ? 0.2 : 0.16, now + offset + 0.018);
           gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.14);
           osc.connect(gain);
           gain.connect(ctx.destination);
@@ -310,33 +411,55 @@ export default function DashboardApp() {
         if (navigator.vibrate) {
           navigator.vibrate([180, 70, 180, 220, 180]);
         }
-        window.setTimeout(speakOrderAlert, 220);
+        speakDashboardAlert(alertType);
       };
       if (ctx.state === "suspended") {
         ctx.resume().then(() => {
-          setSoundReady(true);
+          markSoundReady(true);
           beep();
-        }).catch(() => setSoundReady(false));
+        }).catch(() => markSoundReady(false));
         return;
       }
-      setSoundReady(true);
+      markSoundReady(true);
       beep();
     } catch {
-      // Audio is best-effort
+      markSoundReady(false);
     }
   }
 
   function testSound() {
     unlockSound();
-    window.setTimeout(playSound, 50);
+    playSound("order");
   }
 
-  function speakOrderAlert() {
+  function markSoundReady(ready) {
+    setSoundReady(ready);
+    try {
+      if (ready) {
+        window.localStorage.setItem(DASHBOARD_SOUND_READY_KEY, "1");
+      } else {
+        window.localStorage.removeItem(DASHBOARD_SOUND_READY_KEY);
+      }
+    } catch {
+      // Storage is best-effort.
+    }
+  }
+
+  function speakDashboardAlert(alertType = "order") {
     try {
       if (!("speechSynthesis" in window)) return;
-      const utterance = new SpeechSynthesisUtterance(t("receivedOrderVoice"));
-      utterance.lang = language === "km" ? "km-KH" : "en-US";
-      utterance.rate = language === "km" ? 0.9 : 0.95;
+      let lang = window.localStorage.getItem(DASHBOARD_LANGUAGE_KEY) || "en";
+      let text = "";
+      if (alertType === "rush") {
+        text = lang === "km" ? t("customerWaitingVoice") : t("customerWaitingVoice");
+      } else if (alertType === "payment") {
+        text = lang === "km" ? "បានទទួលការបង់ប្រាក់" : "Received payment";
+      } else {
+        text = lang === "km" ? "បានទទួលការកម្មង់" : "Received new order";
+      }
+      const utterance = new window.SpeechSynthesisUtterance(text);
+      utterance.lang = lang === "km" ? "km-KH" : "en-US";
+      utterance.rate = lang === "km" ? 0.9 : 0.95;
       utterance.volume = 1;
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(utterance);
@@ -346,17 +469,22 @@ export default function DashboardApp() {
   }
 
   function shouldNotifyOrder(order) {
-    return order.status === "PENDING_PAYMENT" || order.status === "RECEIVED";
+    return order.status === "PENDING_PAYMENT" || isPaidKitchenOrder(order);
+  }
+
+  function shouldNotifyPayment(payment) {
+    return payment.status === "PAID";
   }
 
   function notifyOrderToast(order) {
     const toastKey = `${order.id || order.orderNumber}:${order.status}`;
-    if (notifiedOrderToastRef.current.has(toastKey)) return;
+    if (notifiedOrderToastRef.current.has(toastKey)) return false;
     notifiedOrderToastRef.current.add(toastKey);
     if (notifiedOrderToastRef.current.size > 100) {
       notifiedOrderToastRef.current = new Set([...notifiedOrderToastRef.current].slice(-50));
     }
-    gooeyToast.info(t("newOrderUpdate"), goeyToastOptions({
+    const title = isPaidKitchenOrder(order) ? t("paidOrderReady") : t("newOrderUpdate");
+    gooeyToast.info(title, goeyToastOptions({
       id: "dashboard-order-alert",
       description: `${order.orderNumber || t("order")} · ${order.tableNumber || ""}`,
       action: order.id ? {
@@ -364,6 +492,39 @@ export default function DashboardApp() {
         onClick: () => loadOrder(order.id)
       } : undefined
     }));
+    return true;
+  }
+
+  function notifyCustomerAlertToast(orderAlert) {
+    const toastKey = `${orderAlert?.id || orderAlert?.orderNumber || "order"}:rush`;
+    if (notifiedCustomerAlertRef.current.has(toastKey)) return false;
+    notifiedCustomerAlertRef.current.add(toastKey);
+    if (notifiedCustomerAlertRef.current.size > 100) {
+      notifiedCustomerAlertRef.current = new Set([...notifiedCustomerAlertRef.current].slice(-50));
+    }
+    gooeyToast.info(t("orderNeedsAttention"), goeyToastOptions({
+      id: "dashboard-customer-alert",
+      description: `${orderAlert?.orderNumber || t("order")} · ${orderAlert?.tableNumber || ""} · ${orderAlert?.waitingMinutes || 10}m+`,
+      action: orderAlert?.id ? {
+        label: t("showDetail"),
+        onClick: () => loadOrder(orderAlert.id)
+      } : undefined
+    }));
+    return true;
+  }
+
+  function notifyPaymentToast(payment) {
+    const toastKey = `${payment.id || payment.paymentNumber}:${payment.status}`;
+    if (notifiedPaymentToastRef.current.has(toastKey)) return false;
+    notifiedPaymentToastRef.current.add(toastKey);
+    if (notifiedPaymentToastRef.current.size > 100) {
+      notifiedPaymentToastRef.current = new Set([...notifiedPaymentToastRef.current].slice(-50));
+    }
+    gooeyToast.success(t("paymentReceivedAlert"), goeyToastOptions({
+      id: "dashboard-payment-alert",
+      description: `${payment.paymentNumber || t("payments")} · ${payment.tableNumber || ""}`
+    }));
+    return true;
   }
 
   if (!signedIn) {
@@ -444,6 +605,7 @@ export default function DashboardApp() {
             onSelect={loadOrder}
             onClear={() => setSelectedOrder(null)}
             onStatus={updateOrderStatus}
+            now={dashboardNow}
           />
         ) : null}
 
@@ -464,7 +626,7 @@ export default function DashboardApp() {
         ) : null}
 
         {tab === "analytics" ? (
-          <AnalyticsView analytics={analytics} lastUpdatedAt={lastUpdatedAt} onRefresh={loadAnalytics} />
+          <AnalyticsView analytics={analytics} error={analyticsError} lastUpdatedAt={lastUpdatedAt} onRefresh={loadAnalytics} />
         ) : null}
       </div>
     </main>
@@ -473,9 +635,10 @@ export default function DashboardApp() {
 
 // Orders
 
-function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus }) {
+function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now }) {
   const { t } = useLanguage();
   const [sortKey, setSortKey]         = useState("time_desc");
+  const [statusFilter, setStatusFilter] = useState("");
   const [paymentFilter, setPaymentFilter] = useState("");
   const [dateFilter, setDateFilter] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -502,6 +665,10 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus }) {
       } else {
         result = result.filter((o) => o.paymentStatus === paymentFilter);
       }
+    }
+
+    if (statusFilter) {
+      result = result.filter((o) => o.status === statusFilter);
     }
 
     if (dateFilter) {
@@ -533,7 +700,11 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus }) {
     });
 
     return result;
-  }, [orders, sortKey, paymentFilter, dateFilter, searchQuery]);
+  }, [orders, sortKey, statusFilter, paymentFilter, dateFilter, searchQuery]);
+  const attentionOrders = useMemo(
+    () => displayedOrders.filter((order) => needsKitchenAttention(order, now)),
+    [displayedOrders, now]
+  );
 
   return (
     <div className="grid gap-5 lg:grid-cols-[1fr_420px]">
@@ -555,7 +726,7 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus }) {
               placeholder={t("searchOrderTable")}
             />
           </div>
-          <div className="grid gap-2 sm:grid-cols-3">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <div className="relative">
               <ArrowUpDown className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
               <Select
@@ -569,6 +740,18 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus }) {
               </Select>
             </div>
             <div className="relative">
+              <Check className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="pl-9 text-sm"
+              >
+                {ORDER_STATUS_FILTERS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>
+                ))}
+              </Select>
+            </div>
+            <div className="relative">
               <Filter className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
               <Select
                 value={paymentFilter}
@@ -576,7 +759,7 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus }) {
                 className="pl-9 text-sm"
               >
                 {PAYMENT_FILTERS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.labelKey ? t(opt.labelKey) : opt.label}</option>
+                  <option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>
                 ))}
               </Select>
             </div>
@@ -611,6 +794,17 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus }) {
         </div>
 
         <CardContent className="space-y-3 pt-3">
+          {attentionOrders.length > 0 ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-secondary/40 bg-secondary/10 px-3 py-2 text-sm">
+              <span className="flex min-w-0 items-center gap-2 font-medium">
+                <BellRing className="h-4 w-4 shrink-0 text-secondary-foreground" />
+                {t("orderNeedsAttention")} · {attentionOrders.length}
+              </span>
+              <Button type="button" variant="outline" className="h-9 px-3 text-xs" onClick={() => onSelect(attentionOrders[0].id)}>
+                {t("showDetail")}
+              </Button>
+            </div>
+          ) : null}
           {displayedOrders.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t("noOrdersFilter")}</p>
           ) : (
@@ -618,11 +812,12 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus }) {
               const firstItemImg = displayImageUrl(order.firstItemImageUrl || order.items?.[0]?.imageUrl);
               const firstItemName = order.firstItemName || order.items?.[0]?.itemName;
               const firstCategoryName = order.firstCategoryName;
+              const needsAttention = needsKitchenAttention(order, now);
               return (
                 <button
                   key={order.id}
                   onClick={() => onSelect(order.id)}
-                  className="w-full rounded-md border border-border bg-card p-3 text-left transition hover:border-primary"
+                  className={`w-full rounded-md border bg-card p-3 text-left transition hover:border-primary ${needsAttention ? "border-secondary shadow-sm shadow-secondary/10" : "border-border"}`}
                 >
                   <div className="flex items-start gap-3">
                     {firstItemImg ? (
@@ -640,10 +835,18 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus }) {
                         <div>
                           <div className="font-semibold">{order.orderNumber}</div>
                           <div className="text-sm text-muted-foreground">{order.tableNumber}</div>
-                          <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
-                            <Clock className="h-3 w-3" />
-                            {formatOrderDateTime(order.createdAt)}
+	                          <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+	                            <Clock className="h-3 w-3" />
+	                            {formatOrderDateTime(order.createdAt)}
                           </div>
+                          <div className="mt-1">
+                            <OrderMinutesBadge minutes={totalOrderMinutes(order, now)} />
+                          </div>
+                          {isAlreadyPaidOrder(order) ? (
+                            <div className="mt-1">
+                              <PaidMinutesBadge minutes={paidWaitingMinutes(order, now)} />
+                            </div>
+                          ) : null}
                           {firstItemName ? (
                             <div className="mt-0.5 truncate text-xs text-muted-foreground">
                               {firstCategoryName ? `${firstCategoryName} - ` : ""}{firstItemName}
@@ -653,7 +856,10 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus }) {
                             <div className="mt-1 text-xs text-primary">{t("promoCode")}: {order.promoCode}</div>
                           ) : null}
                         </div>
-                        <StatusBadge status={order.status} />
+                        <div className="flex flex-col items-end gap-1">
+                          <StatusBadge status={order.status} />
+                          {needsAttention ? <AttentionBadge minutes={waitingMinutes(order, now)} /> : null}
+                        </div>
                       </div>
                       <div className="mt-1 flex items-center justify-between text-sm">
                         <span>{displayUsd(order.totalUsd)} / {khr(order.totalKhr)}</span>
@@ -673,7 +879,7 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus }) {
           <CardTitle>{t("orderDetail")}</CardTitle>
         </CardHeader>
         <CardContent className="max-h-[calc(100vh-9rem)] overflow-auto">
-          <OrderDetailContent selectedOrder={selectedOrder} onStatus={onStatus} />
+          <OrderDetailContent selectedOrder={selectedOrder} onStatus={onStatus} now={now} />
         </CardContent>
       </Card>
 
@@ -682,13 +888,14 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus }) {
           selectedOrder={selectedOrder}
           onStatus={onStatus}
           onClose={onClear}
+          now={now}
         />
       ) : null}
     </div>
   );
 }
 
-function MobileOrderSheet({ selectedOrder, onStatus, onClose }) {
+function MobileOrderSheet({ selectedOrder, onStatus, onClose, now }) {
   const { t } = useLanguage();
   return (
     <div className="fixed inset-0 z-40 flex items-end bg-black/40 backdrop-blur-sm lg:hidden" onClick={onClose}>
@@ -706,18 +913,19 @@ function MobileOrderSheet({ selectedOrder, onStatus, onClose }) {
           </button>
         </div>
         <div className="p-4">
-          <OrderDetailContent selectedOrder={selectedOrder} onStatus={onStatus} />
+          <OrderDetailContent selectedOrder={selectedOrder} onStatus={onStatus} now={now} />
         </div>
       </div>
     </div>
   );
 }
 
-function OrderDetailContent({ selectedOrder, onStatus }) {
+function OrderDetailContent({ selectedOrder, onStatus, now }) {
   const { t } = useLanguage();
   if (!selectedOrder) {
     return <p className="text-sm text-muted-foreground">{t("selectOrderDetail")}</p>;
   }
+  const needsAttention = needsKitchenAttention(selectedOrder, now);
 
   return (
     <div className="space-y-4">
@@ -725,13 +933,28 @@ function OrderDetailContent({ selectedOrder, onStatus }) {
         <div>
           <h2 className="font-semibold">{selectedOrder.orderNumber}</h2>
           <p className="text-sm text-muted-foreground">{selectedOrder.tableNumber}</p>
-          <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-            <Clock className="h-3 w-3" />
-            {formatOrderDateTime(selectedOrder.createdAt)}
-          </p>
+	          <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+	            <Clock className="h-3 w-3" />
+	            {formatOrderDateTime(selectedOrder.createdAt)}
+	          </p>
+          <div className="mt-2">
+            <OrderMinutesBadge minutes={totalOrderMinutes(selectedOrder, now)} />
+          </div>
+          {isAlreadyPaidOrder(selectedOrder) ? (
+            <div className="mt-2">
+              <PaidMinutesBadge minutes={paidWaitingMinutes(selectedOrder, now)} />
+            </div>
+          ) : null}
         </div>
         <StatusBadge status={selectedOrder.status} />
       </div>
+
+      {needsAttention ? (
+        <div className="flex items-start gap-2 rounded-md border border-secondary/40 bg-secondary/10 px-3 py-2 text-sm">
+          <BellRing className="mt-0.5 h-4 w-4 shrink-0 text-secondary-foreground" />
+          <span>{t("waitingTooLong")} · {waitingMinutes(selectedOrder, now)}m</span>
+        </div>
+      ) : null}
 
       <div className="space-y-2">
         {selectedOrder.items?.map((item) => (
@@ -783,7 +1006,7 @@ function OrderDetailContent({ selectedOrder, onStatus }) {
         {NEXT_STATUS[selectedOrder.status] ? (
           <Button onClick={() => onStatus(selectedOrder.id, NEXT_STATUS[selectedOrder.status])}>
             <Check className="h-4 w-4" />
-            {NEXT_STATUS[selectedOrder.status]}
+            {dashboardStatusLabel(NEXT_STATUS[selectedOrder.status], t)}
           </Button>
         ) : null}
         {!["COMPLETED", "REJECTED", "CANCELLED", "EXPIRED"].includes(selectedOrder.status) ? (
@@ -1277,13 +1500,19 @@ function PromoCodesView({ promos, request, reload }) {
 
 // Analytics
 
-function AnalyticsView({ analytics, lastUpdatedAt, onRefresh }) {
+function AnalyticsView({ analytics, error, lastUpdatedAt, onRefresh }) {
   const { t } = useLanguage();
   if (!analytics) {
     return (
       <Card>
-        <CardContent className="flex min-h-48 items-center justify-center text-sm text-muted-foreground">
-          {t("loadingMenu")}
+        <CardContent className="flex min-h-48 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+          <span>{error || t("loadingAnalytics")}</span>
+          {error ? (
+            <Button type="button" variant="outline" onClick={onRefresh}>
+              <RefreshCw className="h-4 w-4" />
+              {t("refresh")}
+            </Button>
+          ) : null}
         </CardContent>
       </Card>
     );
@@ -1321,7 +1550,7 @@ function AnalyticsView({ analytics, lastUpdatedAt, onRefresh }) {
         <Metric icon={CalendarDays} title={t("dailyRevenue")} value={usd(dailyRevenue)} sub={`${dailyOrders} ${t("orders")} · ${khr(analytics.daily?.dailyRevenueKhr)}`} tone="primary" />
         <Metric icon={BarChart3} title={t("weeklyRevenue")} value={usd(weeklyRevenue)} sub={`${weeklyOrders} ${t("orders")} · ${khr(analytics.weekly?.weeklyRevenueKhr)}`} tone="accent" />
         <Metric icon={CreditCard} title={t("averageOrder")} value={usd(analytics.averageOrderValue?.averageOrderValueUsd)} sub={khr(analytics.averageOrderValue?.averageOrderValueKhr)} tone="secondary" />
-        <Metric icon={Clock} title="Active orders" value={String(activeOrders)} sub={`${paymentRate}% paid payments`} tone="muted" />
+        <Metric icon={Clock} title={t("activeOrders")} value={String(activeOrders)} sub={`${paymentRate}% ${t("paidPayments")}`} tone="muted" />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
@@ -1333,7 +1562,7 @@ function AnalyticsView({ analytics, lastUpdatedAt, onRefresh }) {
         <Card>
           <CardHeader className="flex-row items-center justify-between gap-3">
             <CardTitle>{t("sortStatus")}</CardTitle>
-            <Badge tone="secondary">{activeOrders} active</Badge>
+            <Badge tone="secondary">{activeOrders} {t("active")}</Badge>
           </CardHeader>
           <CardContent>
             <StatusFunnel rows={analytics.orderCountByStatus} />
@@ -1342,12 +1571,12 @@ function AnalyticsView({ analytics, lastUpdatedAt, onRefresh }) {
 
         <Card>
           <CardHeader>
-            <CardTitle>Highlights</CardTitle>
+            <CardTitle>{t("highlights")}</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-3">
             <HighlightRow icon={Utensils} label={t("topItems")} value={topItem?.itemName || "-"} sub={topItem ? `${topItem.quantity} sold · ${usd(topItem.revenueUsd)}` : "-"} />
             <HighlightRow icon={Table2} label={t("revenueByTable")} value={topTable?.tableNumber || "-"} sub={topTable ? `${topTable.orders} ${t("orders")} · ${usd(topTable.revenueUsd)}` : "-"} />
-            <HighlightRow icon={CreditCard} label={t("payments")} value={`${paymentRate}% paid`} sub={`${paidPayments}/${totalPayments || 0} payments`} />
+            <HighlightRow icon={CreditCard} label={t("payments")} value={`${paymentRate}% ${t("paid")}`} sub={`${paidPayments}/${totalPayments || 0} ${t("payments")}`} />
           </CardContent>
         </Card>
       </div>
@@ -1355,7 +1584,7 @@ function AnalyticsView({ analytics, lastUpdatedAt, onRefresh }) {
       <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
         <AnalyticsBarsCard title={t("topItems")} rows={analytics.topSellingItems} label="itemName" value="quantity" detailValue="revenueUsd" detailCurrency />
         <AnalyticsBarsCard title={t("revenueByTable")} rows={analytics.revenueByTable} label="tableNumber" value="revenueUsd" currency detailValue="orders" />
-        <AnalyticsBarsCard title="Payment breakdown" rows={analytics.paymentBreakdown} label="paymentMethod" value="count" detailValue="amountUsd" detailCurrency />
+        <AnalyticsBarsCard title={t("paymentBreakdown")} rows={analytics.paymentBreakdown} label="paymentMethod" value="count" detailValue="amountUsd" detailCurrency />
         <PeakHoursCard rows={analytics.peakHours} />
       </div>
     </div>
@@ -1374,11 +1603,13 @@ function TabButton({ active, icon: Icon, label, ...props }) {
 }
 
 function StatusBadge({ status }) {
+  const { t } = useLanguage();
   const tone =
-    status === "PAID" || status === "RECEIVED" || status === "COMPLETED" ? "primary" :
+    status === "PAID" || status === "COMPLETED" ? "primary" :
+    status === "RECEIVED" ? "info" :
     status === "CANCELLED" || status === "REJECTED" || status === "EXPIRED" ? "danger" :
     "secondary";
-  return <Badge tone={tone}>{status}</Badge>;
+  return <Badge tone={tone}>{dashboardStatusLabel(status, t)}</Badge>;
 }
 
 function PaymentBadge({ status }) {
@@ -1389,7 +1620,54 @@ function PaymentBadge({ status }) {
     status === "EXPIRED" ? "danger" :
     status === "PENDING" ? "secondary" :
     "muted";
-  return <Badge tone={tone}>{status}</Badge>;
+  return <Badge tone={tone}>{dashboardStatusLabel(status, t)}</Badge>;
+}
+
+function AttentionBadge({ minutes }) {
+  const { t } = useLanguage();
+  return (
+    <Badge tone="accent" className="gap-1">
+      <BellRing className="h-3 w-3" />
+      {t("alert")} {minutes}m
+    </Badge>
+  );
+}
+
+function OrderMinutesBadge({ minutes }) {
+  const { t } = useLanguage();
+  return (
+    <Badge tone="muted" className="gap-1">
+      <Clock className="h-3 w-3" />
+      {t("totalMinutes")} {minutes}m
+    </Badge>
+  );
+}
+
+function PaidMinutesBadge({ minutes }) {
+  const { t } = useLanguage();
+  return (
+    <Badge tone="primary" className="gap-1">
+      <Clock className="h-3 w-3" />
+      {t("paidMinutes")} {minutes}m
+    </Badge>
+  );
+}
+
+function dashboardStatusLabel(status, t) {
+  const labels = {
+    PENDING_PAYMENT: t("awaitingPayment"),
+    PAID: t("paid"),
+    RECEIVED: t("receivedByStaff"),
+    PREPARING: t("preparing"),
+    READY: t("readyForPickup"),
+    COMPLETED: t("completed"),
+    REJECTED: t("rejected"),
+    CANCELLED: t("cancelled"),
+    EXPIRED: t("expired"),
+    PENDING: t("pending"),
+    UNPAID: t("unpaid")
+  };
+  return labels[status] || status || "-";
 }
 
 function formatPromoValue(promo) {
@@ -1432,6 +1710,47 @@ function isSameLocalDate(value, targetDate) {
   return dateInputValue(value) === targetDate;
 }
 
+function isPaidKitchenOrder(order) {
+  return ["PAID", "RECEIVED", "PREPARING"].includes(order?.status);
+}
+
+function isAlreadyPaidOrder(order) {
+  return ["PAID", "RECEIVED", "PREPARING", "READY", "COMPLETED"].includes(order?.status) || order?.paymentStatus === "PAID";
+}
+
+function needsKitchenAttention(order, now = Date.now()) {
+  return isPaidKitchenOrder(order) && waitingMs(order, now) >= ORDER_ATTENTION_MS;
+}
+
+function waitingMinutes(order, now = Date.now()) {
+  return Math.max(0, Math.floor(waitingMs(order, now) / 60000));
+}
+
+function totalOrderMinutes(order, now = Date.now()) {
+  const createdAt = new Date(order?.createdAt).getTime();
+  if (!order?.createdAt || Number.isNaN(createdAt)) return 0;
+  return Math.max(0, Math.floor((now - createdAt) / 60000));
+}
+
+function paidWaitingMinutes(order, now = Date.now()) {
+  const paidAt = new Date(order?.paidAt || order?.createdAt).getTime();
+  if (Number.isNaN(paidAt)) return 0;
+  return Math.max(0, Math.floor((now - paidAt) / 60000));
+}
+
+function waitingMs(order, now = Date.now()) {
+  const baseValue = order?.paidAt || order?.createdAt;
+  const baseTime = new Date(baseValue).getTime();
+  if (!baseValue || Number.isNaN(baseTime)) return 0;
+  return Math.max(0, now - baseTime);
+}
+
+function formatApiError(error, fallback) {
+  const status = error?.status ? `${error.status} ` : "";
+  const message = error?.message && !error.message.startsWith("<") ? error.message : fallback;
+  return `${fallback}${status ? ` (${status.trim()})` : ""}${message && message !== fallback ? `: ${message}` : ""}`;
+}
+
 function Metric({ icon: Icon, title, value, sub, tone = "primary" }) {
   const toneClass = {
     primary: "bg-primary/10 text-primary",
@@ -1472,6 +1791,7 @@ function HighlightRow({ icon: Icon, label, value, sub }) {
 }
 
 function ItemDonutChart({ rows = [] }) {
+  const { t } = useLanguage();
   const totalQuantity = sumRows(rows, "quantity");
   const segments = rows.slice(0, 6).map((row, index) => ({
     label: row.itemName,
@@ -1484,7 +1804,7 @@ function ItemDonutChart({ rows = [] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Orders by item</CardTitle>
+        <CardTitle>{t("ordersByItem")}</CardTitle>
       </CardHeader>
       <CardContent className="grid gap-4 sm:grid-cols-[180px_1fr] sm:items-center">
         <div className="relative mx-auto h-44 w-44">
@@ -1511,7 +1831,7 @@ function ItemDonutChart({ rows = [] }) {
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
             <div className="text-2xl font-bold">{totalQuantity}</div>
-            <div className="text-xs text-muted-foreground">items sold</div>
+            <div className="text-xs text-muted-foreground">{t("itemsSold")}</div>
           </div>
         </div>
         <div className="space-y-2">
@@ -1533,60 +1853,28 @@ function ItemDonutChart({ rows = [] }) {
 }
 
 function PaidRevenueLineChart({ rows = [] }) {
+  const { t } = useLanguage();
   const points = rows.map((row) => ({
-    day: row.day,
+    day: formatShortDay(row.day),
     paidUsd: Number(row.paidUsd || 0),
     payments: Number(row.payments || 0)
   }));
-  const maxValue = Math.max(1, ...points.map((point) => point.paidUsd));
-  const width = 320;
-  const height = 150;
-  const chartTop = 18;
-  const chartBottom = 124;
-  const chartHeight = chartBottom - chartTop;
-  const xStep = points.length > 1 ? width / (points.length - 1) : width;
-  const svgPoints = points.map((point, index) => {
-    const x = index * xStep;
-    const y = chartBottom - (point.paidUsd / maxValue) * chartHeight;
-    return { ...point, x, y };
-  });
-  const linePath = svgPoints.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
   const totalPaid = points.reduce((sum, point) => sum + point.paidUsd, 0);
 
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between gap-3">
-        <CardTitle>Paid revenue by day</CardTitle>
+        <CardTitle>{t("paidRevenueByDay")}</CardTitle>
         <Badge tone="primary">{usd(totalPaid)}</Badge>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <svg viewBox={`0 0 ${width} ${height}`} className="h-48 w-full overflow-visible">
-          <line x1="0" y1={chartBottom} x2={width} y2={chartBottom} stroke="hsl(var(--border))" strokeWidth="1" />
-          <line x1="0" y1={chartTop} x2={width} y2={chartTop} stroke="hsl(var(--border))" strokeWidth="1" strokeDasharray="4 6" />
-          {linePath ? (
-            <path d={linePath} fill="none" stroke="hsl(var(--primary))" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-          ) : null}
-          {svgPoints.map((point, index) => (
-            <g key={point.day || index}>
-              <circle cx={point.x} cy={point.y} r="4" fill="hsl(var(--primary))" />
-              {(index === 0 || index === svgPoints.length - 1 || index % 3 === 0) ? (
-                <text x={point.x} y="145" textAnchor={index === 0 ? "start" : index === svgPoints.length - 1 ? "end" : "middle"} className="fill-muted-foreground text-[10px]">
-                  {formatShortDay(point.day)}
-                </text>
-              ) : null}
-            </g>
-          ))}
-        </svg>
-        <div className="grid grid-cols-2 gap-2 text-sm">
-          <div className="rounded-md bg-muted/40 px-3 py-2">
-            <div className="text-xs text-muted-foreground">Peak day</div>
-            <div className="font-semibold">{formatShortDay(maxBy(points, "paidUsd")?.day)} · {usd(maxBy(points, "paidUsd")?.paidUsd)}</div>
-          </div>
-          <div className="rounded-md bg-muted/40 px-3 py-2">
-            <div className="text-xs text-muted-foreground">Last day</div>
-            <div className="font-semibold">{usd(points.at(-1)?.paidUsd)} · {points.at(-1)?.payments || 0} paid</div>
-          </div>
-        </div>
+      <CardContent>
+        <AnalyticsLineChart
+          data={points}
+          xKey="day"
+          yKey="paidUsd"
+          label={t("paidRevenueByDay")}
+          color="hsl(var(--primary))"
+        />
       </CardContent>
     </Card>
   );
@@ -1622,6 +1910,7 @@ function StatusFunnel({ rows = [] }) {
 }
 
 function AnalyticsBarsCard({ title, rows = [], label, value, currency, detailValue, detailCurrency }) {
+  const { t } = useLanguage();
   const maxValue = Math.max(1, ...rows.map((row) => Number(row[value] || 0)));
   return (
     <Card>
@@ -1640,7 +1929,7 @@ function AnalyticsBarsCard({ title, rows = [], label, value, currency, detailVal
               </div>
               {detailValue != null ? (
                 <div className="text-xs text-muted-foreground">
-                  {detailCurrency ? usd(detail) : `${detail} ${detailValue === "orders" ? "orders" : ""}`}
+                  {detailCurrency ? usd(detail) : `${detail} ${detailValue === "orders" ? t("orders") : ""}`}
                 </div>
               ) : null}
               <div className="h-2 overflow-hidden rounded-full bg-muted">
@@ -1655,10 +1944,11 @@ function AnalyticsBarsCard({ title, rows = [], label, value, currency, detailVal
 }
 
 function PeakHoursCard({ rows = [] }) {
+  const { t } = useLanguage();
   const maxValue = Math.max(1, ...rows.map((row) => Number(row.orders || 0)));
   return (
     <Card>
-      <CardHeader><CardTitle>Peak hours</CardTitle></CardHeader>
+      <CardHeader><CardTitle>{t("peakHours")}</CardTitle></CardHeader>
       <CardContent className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2">
         {rows.length === 0 ? (
           <p className="col-span-full text-sm text-muted-foreground">-</p>
