@@ -74,22 +74,36 @@ textarea {
   scrollbar-width: thin;
 }
 
-.toast-animate {
-  animation: toast-lifetime 3s ease-in-out forwards;
+.bottom-sheet-animate {
+  animation: bottom-sheet-up 180ms ease-out;
 }
 
-@keyframes toast-lifetime {
-  0% {
-    opacity: 0;
-    transform: translateY(-12px) scale(0.98);
+.happyboat-goey-toast {
+  min-width: min(92vw, 430px) !important;
+  max-width: min(92vw, 430px) !important;
+}
+
+.happyboat-goey-toast-title {
+  font-size: 15px !important;
+  line-height: 1.35 !important;
+  font-weight: 700 !important;
+}
+
+.happyboat-goey-toast-description {
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+}
+
+.happyboat-goey-toast-action {
+  min-height: 34px !important;
+  padding-inline: 14px !important;
+}
+
+@keyframes bottom-sheet-up {
+  from {
+    transform: translateY(100%);
   }
-  10%,
-  85% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(-8px) scale(0.98);
+  to {
+    transform: translateY(0);
   }
 }

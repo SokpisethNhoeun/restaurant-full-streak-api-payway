@@ -1,4 +1,7 @@
 import "./globals.css";
+import "goey-toast/styles.css";
+import { GoeyToastProvider } from "@/components/goey-toast-provider";
+import { LanguageProvider } from "@/components/language-provider";
 
 export const metadata = {
   title: "HappyBoat QR Ordering",
@@ -24,7 +27,10 @@ export default function RootLayout({ children }) {
     <html lang="en" suppressHydrationWarning>
       <body>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-        {children}
+        <LanguageProvider>
+          {children}
+          <GoeyToastProvider />
+        </LanguageProvider>
       </body>
     </html>
   );

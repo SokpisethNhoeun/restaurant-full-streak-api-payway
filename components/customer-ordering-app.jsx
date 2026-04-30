@@ -2,13 +2,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { AlertCircle, CheckCircle2, ChevronRight, Clock, Minus, Plus, Search, ShoppingBag, Trash2, Utensils, X, Zap } from "lucide-react";
+import { gooeyToast } from "goey-toast";
+import { AlertCircle, BadgePercent, CheckCircle2, ChevronRight, ChevronUp, Clock, Download, Minus, Plus, Search, ShoppingBag, Trash2, Utensils, X, Zap } from "lucide-react";
 import { api, API_BASE } from "@/lib/api";
-import { cn, khr, tags, usd } from "@/lib/utils";
+import { goeyToastOptions } from "@/lib/goey-toast-options";
+import { cn, displayUsd, khr, tags, usd } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input, Select, Textarea } from "@/components/ui/input";
+import { LanguageToggle, useLanguage } from "@/components/language-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 const PRICE_FILTERS = [
@@ -19,7 +22,10 @@ const PRICE_FILTERS = [
   { value: "10_plus", label: "$10+" },
 ];
 
+const CUSTOMER_STORAGE_TTL_MS = 12 * 60 * 60 * 1000;
+
 export default function CustomerOrderingApp({ tableNumber }) {
+  const { t } = useLanguage();
   const [table, setTable] = useState(null);
   const [menu, setMenu] = useState({ categories: [], items: [], addons: [], options: [] });
   const [categoryId, setCategoryId] = useState("");
@@ -28,41 +34,84 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const [cart, setCart] = useState([]);
   const [activeItem, setActiveItem] = useState(null);
   const [promoCode, setPromoCode] = useState("");
+  const [promoState, setPromoState] = useState({ status: "idle", message: "", detail: null, showDetail: false });
+  const [cartOpen, setCartOpen] = useState(false);
 
   const [orders, setOrders] = useState([]);
   const [payments, setPayments] = useState({});
+  const [deletedOrderIds, setDeletedOrderIds] = useState([]);
+  const [loadedStorageScope, setLoadedStorageScope] = useState("");
   const [openPaymentOrderId, setOpenPaymentOrderId] = useState(null);
 
   const [now, setNow] = useState(Date.now());
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
-  const [toast, setToast] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
   const pollingInFlight = useRef({});
   const paidToastShown = useRef({});
-  const toastTimer = useRef(null);
   const cartRef = useRef(null);
+  const welcomeToastShown = useRef(false);
+
+  const storageKeys = useMemo(() => ({
+    cart: customerStorageKey(tableNumber, "cart"),
+    orders: customerStorageKey(tableNumber, "orders"),
+    payments: customerStorageKey(tableNumber, "payments"),
+    deletedOrders: customerStorageKey(tableNumber, "deleted-orders"),
+  }), [tableNumber]);
 
   const showToast = useCallback((text, variant = "success") => {
-    window.clearTimeout(toastTimer.current);
-    setToast({ text, variant });
-    toastTimer.current = window.setTimeout(() => setToast(null), 3000);
+    const options = goeyToastOptions();
+    if (variant === "error") {
+      gooeyToast.error(text, options);
+      return;
+    }
+    gooeyToast.success(text, options);
   }, []);
 
+  const showAddedToCartToast = useCallback((item) => {
+    gooeyToast.success(t("addedToCartTitle"), goeyToastOptions({
+      description: `${item.name} · ${t("quantity")}: ${item.quantity}`,
+      icon: <ShoppingBag className="h-4 w-4" />,
+      action: {
+        label: t("viewCart"),
+        onClick: () => setCartOpen(true),
+        successLabel: t("opened"),
+      },
+    }));
+  }, [t]);
+
   const notifyPaymentReceived = useCallback((orderId) => {
-    const text = "Payment received. Your order has been sent to staff.";
+    const text = t("paymentReceived");
     setMessage(text);
     if (paidToastShown.current[orderId]) return;
     paidToastShown.current[orderId] = true;
     showToast(text);
-  }, [showToast]);
+  }, [showToast, t]);
 
-  useEffect(() => () => window.clearTimeout(toastTimer.current), []);
+  useEffect(() => {
+    setLoadedStorageScope("");
+    setCart(readCustomerStorage(storageKeys.cart, []));
+    setOrders(readCustomerStorage(storageKeys.orders, []));
+    setPayments(readCustomerStorage(storageKeys.payments, {}));
+    setDeletedOrderIds(readCustomerStorage(storageKeys.deletedOrders, []));
+    paidToastShown.current = {};
+    setOpenPaymentOrderId(null);
+    setLoadedStorageScope(storageKeys.cart);
+  }, [storageKeys.cart, storageKeys.deletedOrders, storageKeys.orders, storageKeys.payments]);
+
+  useEffect(() => {
+    if (loadedStorageScope !== storageKeys.cart) return;
+    writeCustomerStorage(storageKeys.cart, cart);
+    writeCustomerStorage(storageKeys.orders, orders);
+    writeCustomerStorage(storageKeys.payments, payments);
+    writeCustomerStorage(storageKeys.deletedOrders, deletedOrderIds);
+  }, [cart, deletedOrderIds, loadedStorageScope, orders, payments, storageKeys.cart, storageKeys.deletedOrders, storageKeys.orders, storageKeys.payments]);
 
   useEffect(() => {
     async function load() {
       setLoading(true);
+      welcomeToastShown.current = false;
       try {
         const [tableData, menuData] = await Promise.all([
           api(`/api/customer/tables/${tableNumber}`),
@@ -80,7 +129,16 @@ export default function CustomerOrderingApp({ tableNumber }) {
   }, [tableNumber]);
 
   useEffect(() => {
-    const pending = Object.entries(payments).filter(([, p]) => p && p.status !== "PAID" && p.status !== "EXPIRED");
+    if (loading || !table || welcomeToastShown.current) return;
+    welcomeToastShown.current = true;
+    gooeyToast.info(t("welcomeTitle"), goeyToastOptions({
+      description: `${t("youAreAtTable")} ${table.label || tableNumber}`,
+      icon: <Utensils className="h-4 w-4" />,
+    }));
+  }, [loading, table, tableNumber, t]);
+
+  useEffect(() => {
+    const pending = Object.entries(payments).filter(([, p]) => p && p.status === "PENDING");
     if (pending.length === 0) return;
     const timer = setInterval(async () => {
       for (const [orderId, payment] of pending) {
@@ -89,7 +147,10 @@ export default function CustomerOrderingApp({ tableNumber }) {
         try {
           const verified = await api(`/api/payments/${payment.id}/verify`, { method: "POST" });
           setPayments((prev) => ({ ...prev, [orderId]: verified }));
-          if (verified.status === "PAID") notifyPaymentReceived(orderId);
+          if (verified.status === "PAID") {
+            setOrders((prev) => prev.map((order) => order.id === orderId ? { ...order, status: "RECEIVED" } : order));
+            notifyPaymentReceived(orderId);
+          }
         } catch {}
         finally { pollingInFlight.current[payment.id] = false; }
       }
@@ -98,7 +159,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
   }, [payments, notifyPaymentReceived]);
 
   useEffect(() => {
-    const hasPending = Object.values(payments).some((p) => p && p.status !== "PAID" && p.status !== "EXPIRED");
+    const hasPending = Object.values(payments).some((p) => p && p.status === "PENDING");
     if (!hasPending) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
@@ -117,10 +178,19 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const groupedOptions = useMemo(() => groupBy(menu.options, "menuItemId"), [menu.options]);
 
   const totals = useMemo(() => {
-    const totalUsd = cart.reduce((sum, item) => sum + item.lineUsd, 0);
+    const subtotalUsd = cart.reduce((sum, item) => sum + Number(item.lineUsd || 0), 0);
+    const discountUsd = promoState.status === "valid"
+      ? promoDiscountForSubtotal(promoState.detail, subtotalUsd)
+      : 0;
+    const totalUsd = Math.max(0, subtotalUsd - discountUsd);
     const totalKhr = Math.round(totalUsd * Number(menu.exchangeRateKhrPerUsd || 4100));
-    return { totalUsd, totalKhr };
-  }, [cart, menu.exchangeRateKhrPerUsd]);
+    return { subtotalUsd, discountUsd, totalUsd, totalKhr };
+  }, [cart, menu.exchangeRateKhrPerUsd, promoState.detail, promoState.status]);
+
+  const visibleOrders = useMemo(() => {
+    const deleted = new Set(deletedOrderIds);
+    return orders.filter((order) => !deleted.has(order.id));
+  }, [deletedOrderIds, orders]);
 
   function secsRemaining(payment) {
     if (!payment?.expiredAt) return 0;
@@ -130,7 +200,43 @@ export default function CustomerOrderingApp({ tableNumber }) {
   function addConfiguredItem(configured) {
     setCart((current) => [...current, { ...configured, cartId: crypto.randomUUID() }]);
     setActiveItem(null);
-    showToast(`${configured.name} added to cart.`);
+    showAddedToCartToast(configured);
+  }
+
+  function handlePromoCodeChange(value) {
+    setPromoCode(value.toUpperCase());
+    setPromoState({ status: "idle", message: "", detail: null, showDetail: false });
+  }
+
+  async function applyPromoCode() {
+    const code = promoCode.trim();
+    if (!code) {
+      setPromoState({ status: "invalid", message: t("enterPromoCode"), detail: null, showDetail: false });
+      return;
+    }
+    if (!cart.length) {
+      setPromoState({ status: "invalid", message: t("promoBeforeItems"), detail: null, showDetail: false });
+      return;
+    }
+
+    setPromoState((current) => ({ ...current, status: "checking", message: t("checkingPromoCode") }));
+    try {
+      const detail = await api(`/api/customer/promos/${encodeURIComponent(code)}/validate?subtotalUsd=${totals.subtotalUsd.toFixed(2)}`);
+      if (detail.valid) {
+        setPromoState({ status: "valid", message: t("promoApplied"), detail, showDetail: false });
+        showToast(t("promoApplied"));
+      } else {
+        setPromoState({ status: "invalid", message: t("invalidPromo"), detail: null, showDetail: false });
+        showToast(t("invalidPromo"), "error");
+      }
+    } catch (error) {
+      setPromoState({ status: "invalid", message: error.message || t("invalidPromo"), detail: null, showDetail: false });
+      showToast(error.message || t("invalidPromo"), "error");
+    }
+  }
+
+  function togglePromoDetail() {
+    setPromoState((current) => ({ ...current, showDetail: !current.showDetail }));
   }
 
   function changeQuantity(cartId, delta) {
@@ -145,7 +251,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
   }
 
   async function submitOrder() {
-    if (!cart.length || submitting) return;
+    if (!cart.length || submitting || totals.totalUsd <= 0) return;
     setMessage("");
     setSubmitting(true);
     try {
@@ -163,19 +269,22 @@ export default function CustomerOrderingApp({ tableNumber }) {
         })),
       };
       const created = await api("/api/customer/orders", { method: "POST", body: JSON.stringify(payload) });
-      setOrders((prev) => [...prev, created]);
+      setOrders((prev) => upsertById(prev, created));
+      setDeletedOrderIds((prev) => prev.filter((id) => id !== created.id));
       setCart([]);
       setPromoCode("");
+      setPromoState({ status: "idle", message: "", detail: null, showDetail: false });
+      setCartOpen(false);
       try {
         const createdPayment = await api(`/api/payments/orders/${created.id}/khqr`, { method: "POST" });
         setPayments((prev) => ({ ...prev, [created.id]: createdPayment }));
         setOpenPaymentOrderId(created.id);
-        setMessage("Order placed! Scan the KHQR code below to pay.");
+        setMessage(t("orderPlacedQr"));
       } catch {
-        setMessage("Order placed. Tap 'Pay with Bakong KHQR' to generate a QR code.");
+        setMessage(t("orderPlacedTapPay"));
       }
     } catch (error) {
-      const customerMessage = isPromoCodeError(error, promoCode) ? "Promo code is wrong." : error.message;
+      const customerMessage = isPromoCodeError(error, promoCode) ? t("invalidPromo") : error.message;
       setMessage(customerMessage);
       showToast(customerMessage, "error");
     } finally {
@@ -205,8 +314,40 @@ export default function CustomerOrderingApp({ tableNumber }) {
     try {
       const verified = await api(`/api/payments/${payment.id}/verify`, { method: "POST" });
       setPayments((prev) => ({ ...prev, [orderId]: verified }));
-      if (verified.status === "PAID") notifyPaymentReceived(orderId);
+      if (verified.status === "PAID") {
+        setOrders((prev) => prev.map((order) => order.id === orderId ? { ...order, status: "RECEIVED" } : order));
+        notifyPaymentReceived(orderId);
+      }
     } catch {}
+  }
+
+  async function cancelPaymentFor(orderId) {
+    if (!orderId) return;
+    setMessage("");
+    try {
+      const cancelled = await api(`/api/customer/orders/${orderId}/cancel`, { method: "PATCH" });
+      setOrders((prev) => upsertById(prev, cancelled));
+      setPayments((prev) => {
+        const current = prev[orderId];
+        return current ? { ...prev, [orderId]: { ...current, status: "FAILED" } } : prev;
+      });
+      setOpenPaymentOrderId((current) => current === orderId ? null : current);
+      showToast(t("paymentCancelled"));
+    } catch (error) {
+      showToast(error.message || t("paymentCancelFailed"), "error");
+    }
+  }
+
+  function deleteLocalOrder(orderId) {
+    setDeletedOrderIds((prev) => prev.includes(orderId) ? prev : [...prev, orderId]);
+    setPayments((prev) => {
+      if (!prev[orderId]) return prev;
+      const next = { ...prev };
+      delete next[orderId];
+      return next;
+    });
+    setOpenPaymentOrderId((current) => current === orderId ? null : current);
+    showToast(t("orderDeleted"));
   }
 
   if (loading) {
@@ -215,13 +356,14 @@ export default function CustomerOrderingApp({ tableNumber }) {
         <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
           <Utensils className="h-6 w-6 animate-pulse text-primary" />
         </div>
-        <p className="text-sm font-medium text-muted-foreground">Loading menu…</p>
+        <p className="text-sm font-medium text-muted-foreground">{t("loadingMenu")}</p>
       </div>
     );
   }
 
-  const openModalOrder = openPaymentOrderId ? orders.find((o) => o.id === openPaymentOrderId) : null;
+  const openModalOrder = openPaymentOrderId ? visibleOrders.find((o) => o.id === openPaymentOrderId) : null;
   const openModalPayment = openPaymentOrderId ? payments[openPaymentOrderId] : null;
+  const isPaymentMessage = message === t("paymentReceived") || message.startsWith("Payment received");
 
   return (
     <main className="min-h-screen bg-background pb-24 lg:pb-0">
@@ -245,6 +387,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <LanguageToggle />
             <ThemeToggle />
             <div className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-3 text-sm font-semibold">
               <Utensils className="h-3.5 w-3.5 text-primary" />
@@ -261,11 +404,11 @@ export default function CustomerOrderingApp({ tableNumber }) {
           {message ? (
             <div className={cn(
               "mb-5 flex items-start gap-3 rounded-xl border px-4 py-3 text-sm",
-              message.startsWith("Payment received")
+              isPaymentMessage
                 ? "border-primary/30 bg-primary/8 text-primary"
                 : "border-border bg-muted/50"
             )}>
-              {message.startsWith("Payment received")
+              {isPaymentMessage
                 ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
                 : <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
               <span>{message}</span>
@@ -281,7 +424,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                 <Input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search dishes…"
+                  placeholder={t("searchDishes")}
                   className="h-10 rounded-xl pl-9 text-sm"
                 />
                 {query ? (
@@ -298,7 +441,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                 onChange={(e) => setCategoryId(e.target.value)}
                 className="h-10 rounded-xl text-sm"
               >
-                <option value="">All categories</option>
+                <option value="">{t("allCategories")}</option>
                 {menu.categories.map((cat) => (
                   <option key={cat.id} value={cat.id}>{cat.name}</option>
                 ))}
@@ -343,12 +486,12 @@ export default function CustomerOrderingApp({ tableNumber }) {
             {filteredItems.length === 0 ? (
               <div className="col-span-full flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-muted/30 py-14 text-center">
                 <Search className="h-8 w-8 text-muted-foreground/40" />
-                <p className="text-sm font-medium text-muted-foreground">No dishes match your filters</p>
+                <p className="text-sm font-medium text-muted-foreground">{t("noDishes")}</p>
                 <button
                   onClick={() => { setQuery(""); setCategoryId(""); setPriceFilter("all"); }}
                   className="text-xs font-medium text-primary hover:underline"
                 >
-                  Clear filters
+                  {t("clearFilters")}
                 </button>
               </div>
             ) : null}
@@ -356,13 +499,13 @@ export default function CustomerOrderingApp({ tableNumber }) {
         </section>
 
         {/* ── Cart sidebar ───────────────────────────────────── */}
-        <aside ref={cartRef} className="scroll-mt-24 space-y-4 lg:sticky lg:top-24 lg:self-start">
+        <aside ref={cartRef} className="hidden scroll-mt-24 space-y-4 lg:block lg:sticky lg:top-24 lg:self-start">
           <Card className="overflow-hidden rounded-2xl border-border/60 shadow-sm">
             {/* Cart header */}
             <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-4 py-3">
               <div className="flex items-center gap-2">
                 <ShoppingBag className="h-4 w-4 text-primary" />
-                <h2 className="text-sm font-bold">Your Order</h2>
+                <h2 className="text-sm font-bold">{t("yourOrder")}</h2>
               </div>
               {cart.length > 0 ? (
                 <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-bold text-primary-foreground">
@@ -377,7 +520,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                 {cart.length === 0 ? (
                   <div className="flex flex-col items-center gap-2 py-8 text-center">
                     <ShoppingBag className="h-8 w-8 text-muted-foreground/30" />
-                    <p className="text-xs text-muted-foreground">Add dishes to get started</p>
+                    <p className="text-xs text-muted-foreground">{t("addDishes")}</p>
                   </div>
                 ) : (
                   cart.map((item) => (
@@ -426,24 +569,65 @@ export default function CustomerOrderingApp({ tableNumber }) {
               </div>
 
               {/* Promo code */}
-              <div className="relative">
+              <div className="space-y-2">
+                <div className="flex gap-2">
                 <Input
                   value={promoCode}
-                  onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
-                  placeholder="Promo code"
-                  className="h-9 rounded-xl pr-16 text-sm uppercase tracking-wider"
+                  onChange={(e) => handlePromoCodeChange(e.target.value)}
+                  placeholder={t("promoCode")}
+                  className="h-9 rounded-xl text-sm uppercase tracking-wider"
                 />
-                {promoCode ? (
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-primary">
-                    APPLY
-                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-9 shrink-0 rounded-xl px-3 text-xs"
+                    disabled={promoState.status === "checking"}
+                    onClick={applyPromoCode}
+                  >
+                    <BadgePercent className="h-3.5 w-3.5" />
+                    {promoState.status === "checking" ? t("checking") : t("apply")}
+                  </Button>
+                </div>
+                {promoState.message ? (
+                  <div className={cn(
+                    "rounded-xl border px-3 py-2 text-xs",
+                    promoState.status === "valid"
+                      ? "border-primary/30 bg-primary/8 text-primary"
+                      : "border-destructive/20 bg-destructive/8 text-destructive"
+                  )}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>{promoState.message}</span>
+                      {promoState.status === "valid" ? (
+                        <button type="button" className="font-semibold underline-offset-2 hover:underline" onClick={togglePromoDetail}>
+                          {promoState.showDetail ? t("hideDetail") : t("showDetail")}
+                        </button>
+                      ) : null}
+                    </div>
+                    {promoState.status === "valid" && promoState.showDetail ? (
+                      <div className="mt-2 space-y-1 border-t border-primary/20 pt-2 text-primary/90">
+                        <div className="font-semibold">{promoState.detail?.code}</div>
+                        {promoState.detail?.description ? <div>{promoState.detail.description}</div> : null}
+                        <div>{formatPromoValue(promoState.detail)}</div>
+                      </div>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
 
               {/* Total */}
               <div className="rounded-xl bg-muted/50 px-4 py-3">
+                <div className="mb-1 flex items-baseline justify-between">
+                  <span className="text-xs text-muted-foreground">{t("subtotal")}</span>
+                  <span className="text-sm font-semibold">{usd(totals.subtotalUsd)}</span>
+                </div>
+                {totals.discountUsd > 0 ? (
+                  <div className="mb-1 flex items-baseline justify-between text-primary">
+                    <span className="text-xs">{t("discount")}</span>
+                    <span className="text-sm font-semibold">-{usd(totals.discountUsd)}</span>
+                  </div>
+                ) : null}
                 <div className="flex items-baseline justify-between">
-                  <span className="text-sm text-muted-foreground">Total</span>
+                  <span className="text-sm text-muted-foreground">{t("total")}</span>
                   <span className="text-base font-bold">{usd(totals.totalUsd)}</span>
                 </div>
                 <div className="mt-0.5 text-right text-xs text-muted-foreground">{khr(totals.totalKhr)}</div>
@@ -452,18 +636,18 @@ export default function CustomerOrderingApp({ tableNumber }) {
               {/* Place order button */}
               <Button
                 className="h-11 w-full rounded-xl text-sm font-semibold shadow-sm"
-                disabled={!cart.length || submitting}
+                disabled={!cart.length || totals.totalUsd <= 0 || submitting}
                 onClick={submitOrder}
               >
                 {submitting ? (
                   <span className="flex items-center gap-2">
                     <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
-                    Placing order…
+                    {t("placingOrder")}
                   </span>
                 ) : (
                   <span className="flex items-center gap-2">
                     <ShoppingBag className="h-4 w-4" />
-                    Place Order
+                    {t("placeOrder")}
                     {cart.length > 0 ? <ChevronRight className="ml-auto h-4 w-4 opacity-60" /> : null}
                   </span>
                 )}
@@ -472,11 +656,12 @@ export default function CustomerOrderingApp({ tableNumber }) {
           </Card>
 
           {/* ── Past orders ───────────────────────────────── */}
-          {orders.map((order) => {
+          {visibleOrders.map((order) => {
             const payment = payments[order.id];
             const secs = secsRemaining(payment);
-            const isPaid = payment?.status === "PAID";
-            const isExpired = payment?.status === "EXPIRED" || (payment?.status === "PENDING" && secs === 0);
+            const isCancelled = order.status === "CANCELLED" || payment?.status === "FAILED";
+            const isPaid = !isCancelled && (payment?.status === "PAID" || ["PAID", "RECEIVED", "PREPARING", "READY", "COMPLETED"].includes(order.status));
+            const isExpired = order.status === "EXPIRED" || payment?.status === "EXPIRED" || (payment?.status === "PENDING" && secs === 0);
 
             return (
               <Card key={order.id} className="overflow-hidden rounded-2xl border-border/60 shadow-sm">
@@ -492,33 +677,49 @@ export default function CustomerOrderingApp({ tableNumber }) {
                     "rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide",
                     isPaid
                       ? "bg-primary/15 text-primary"
+                      : isCancelled
+                      ? "bg-destructive/10 text-destructive"
                       : isExpired
                       ? "bg-destructive/10 text-destructive"
                       : payment
                       ? "bg-secondary/20 text-secondary-foreground"
                       : "bg-muted text-muted-foreground"
                   )}>
-                    {isPaid ? "Paid" : isExpired ? "Expired" : payment ? "Pending" : "Unpaid"}
+                    {isPaid ? t("paid") : isCancelled ? t("cancelled") : isExpired ? t("expired") : payment ? t("pending") : t("unpaid")}
                   </span>
                 </div>
                 <CardContent className="space-y-3 p-4">
                   <div className="flex items-baseline gap-2">
-                    <span className="text-base font-bold">{usd(order.totalUsd)}</span>
+                    <span className="text-base font-bold">{displayUsd(order.totalUsd)}</span>
                     <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
                   </div>
 
-                  {isPaid ? (
+                  {isCancelled ? (
+                    <>
+                      <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
+                        {t("orderCancelled")}
+                      </div>
+                      <Button
+                        className="h-9 w-full rounded-xl text-sm"
+                        variant="outline"
+                        onClick={() => deleteLocalOrder(order.id)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        {t("deleteOrder")}
+                      </Button>
+                    </>
+                  ) : isPaid ? (
                     <>
                       <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/8 px-3 py-2.5 text-xs font-medium text-primary">
                         <CheckCircle2 className="h-4 w-4 shrink-0" />
-                        Payment confirmed — order sent to kitchen
+                        {t("paymentConfirmed")}
                       </div>
                       <a
                         href={`${API_BASE}/api/receipts/orders/${order.id}.pdf`}
                         target="_blank"
                         className="flex items-center justify-center gap-1.5 text-sm font-medium text-primary hover:underline"
                       >
-                        Open receipt
+                        {t("openReceipt")}
                         <ChevronRight className="h-3.5 w-3.5" />
                       </a>
                     </>
@@ -527,22 +728,32 @@ export default function CustomerOrderingApp({ tableNumber }) {
                       {payment && !isExpired ? (
                         <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                           <Clock className="h-3.5 w-3.5 shrink-0" />
-                          Expires in {formatDuration(secs)}
+                          {t("expiresIn")} {formatDuration(secs)}
                         </div>
                       ) : null}
                       {isExpired ? (
                         <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
-                          QR expired — generate a new one below
+                          {t("qrExpiredShort")}
                         </div>
                       ) : null}
-                      <Button
-                        className="h-9 w-full rounded-xl text-sm"
-                        variant="secondary"
-                        onClick={() => openPaymentFor(order.id)}
-                      >
-                        <Zap className="h-3.5 w-3.5" />
-                        {payment && !isExpired ? "View payment QR" : "Pay with Bakong KHQR"}
-                      </Button>
+                      <div className="grid gap-2">
+                        <Button
+                          className="h-9 w-full rounded-xl text-sm"
+                          variant="secondary"
+                          onClick={() => openPaymentFor(order.id)}
+                        >
+                          <Zap className="h-3.5 w-3.5" />
+                          {payment && !isExpired ? t("viewPaymentQr") : t("payWithBakong")}
+                        </Button>
+                        <Button
+                          className="h-9 w-full rounded-xl text-sm"
+                          variant="outline"
+                          onClick={() => cancelPaymentFor(order.id)}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                          {t("cancelPayment")}
+                        </Button>
+                      </div>
                     </>
                   )}
                 </CardContent>
@@ -553,21 +764,29 @@ export default function CustomerOrderingApp({ tableNumber }) {
       </div>
 
       {/* ── Mobile sticky cart bar ─────────────────────────── */}
-      {!activeItem && !openPaymentOrderId ? (
+      {!activeItem && !openPaymentOrderId && !cartOpen ? (
         <div className="fixed bottom-4 left-4 right-4 z-30 lg:hidden">
           <button
             type="button"
-            onClick={() => cartRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            onClick={() => setCartOpen(true)}
             className={cn(
-              "flex w-full items-center justify-between rounded-2xl px-5 py-3.5 shadow-lg transition-all",
+              "relative flex w-full items-center justify-between rounded-2xl px-5 py-3.5 shadow-lg transition-all",
               cart.length > 0
                 ? "bg-primary text-primary-foreground"
                 : "bg-card border border-border text-foreground"
             )}
           >
+            <span className={cn(
+              "absolute -top-3 left-1/2 flex h-6 w-12 -translate-x-1/2 items-center justify-center rounded-full border shadow-sm",
+              cart.length > 0
+                ? "border-primary/30 bg-primary text-primary-foreground"
+                : "border-border bg-card text-muted-foreground"
+            )}>
+              <ChevronUp className="h-4 w-4" />
+            </span>
             <span className="flex items-center gap-2.5 text-sm font-semibold">
               <ShoppingBag className="h-4 w-4" />
-              {cart.length > 0 ? `${cart.length} ${cart.length === 1 ? "item" : "items"}` : "View cart"}
+              {cart.length > 0 ? `${cart.length} ${cart.length === 1 ? "item" : "items"}` : t("viewCart")}
             </span>
             {cart.length > 0 ? (
               <span className="text-sm font-bold">{usd(totals.totalUsd)}</span>
@@ -576,8 +795,28 @@ export default function CustomerOrderingApp({ tableNumber }) {
         </div>
       ) : null}
 
-      {/* ── Toast ──────────────────────────────────────────── */}
-      {toast ? <Toast message={toast.text} variant={toast.variant} onClose={() => setToast(null)} /> : null}
+      {cartOpen ? (
+        <MobileCartSheet
+          cart={cart}
+          setCart={setCart}
+          changeQuantity={changeQuantity}
+          promoCode={promoCode}
+          onPromoCodeChange={handlePromoCodeChange}
+          promoState={promoState}
+          onApplyPromo={applyPromoCode}
+          onTogglePromoDetail={togglePromoDetail}
+          totals={totals}
+          submitting={submitting}
+          onSubmitOrder={submitOrder}
+          orders={visibleOrders}
+          payments={payments}
+          secsRemaining={secsRemaining}
+          onOpenPayment={openPaymentFor}
+          onCancelPayment={cancelPaymentFor}
+          onDeleteOrder={deleteLocalOrder}
+          onClose={() => setCartOpen(false)}
+        />
+      ) : null}
 
       {/* ── Modals ─────────────────────────────────────────── */}
       {activeItem ? (
@@ -597,6 +836,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
           secondsRemaining={secsRemaining(openModalPayment)}
           onClose={() => setOpenPaymentOrderId(null)}
           onRefresh={() => refreshPaymentFor(openPaymentOrderId)}
+          onCancel={() => cancelPaymentFor(openPaymentOrderId)}
         />
       ) : null}
     </main>
@@ -605,8 +845,29 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
 /* ── MenuCard ─────────────────────────────────────────────── */
 function MenuCard({ item, onSelect }) {
+  const { t } = useLanguage();
+  function selectItem() {
+    if (!item.available) return;
+    onSelect();
+  }
+
   return (
-    <div className="group flex flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-md">
+    <div
+      role="button"
+      tabIndex={item.available ? 0 : -1}
+      onClick={selectItem}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          selectItem();
+        }
+      }}
+      aria-label={`Customize ${item.name}`}
+      className={cn(
+        "group flex flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-md",
+        item.available ? "cursor-pointer active:scale-[0.99]" : "cursor-not-allowed opacity-75"
+      )}
+    >
       {/* Image */}
       <div className="relative aspect-[16/10] overflow-hidden bg-muted">
         <img
@@ -646,11 +907,14 @@ function MenuCard({ item, onSelect }) {
 
         <div className="mt-3 flex items-center justify-between gap-2">
           <div>
-            <div className="text-sm font-bold">{usd(item.priceUsd)}</div>
+            <div className="text-sm font-bold">{displayUsd(item.priceUsd)}</div>
             <div className="text-[10px] text-muted-foreground">{khr(item.priceKhr)}</div>
           </div>
           <button
-            onClick={onSelect}
+            onClick={(event) => {
+              event.stopPropagation();
+              selectItem();
+            }}
             disabled={!item.available}
             className={cn(
               "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition-all",
@@ -658,7 +922,7 @@ function MenuCard({ item, onSelect }) {
                 ? "bg-primary text-primary-foreground shadow-sm hover:opacity-90 active:scale-95"
                 : "cursor-not-allowed bg-muted text-muted-foreground"
             )}
-            aria-label={`Add ${item.name}`}
+            aria-label={`${t("addToCart")} ${item.name}`}
           >
             <Plus className="h-4 w-4" />
           </button>
@@ -668,36 +932,294 @@ function MenuCard({ item, onSelect }) {
   );
 }
 
-/* ── Toast ────────────────────────────────────────────────── */
-function Toast({ message, variant = "success", onClose }) {
-  const isError = variant === "error";
-  const Icon = isError ? AlertCircle : CheckCircle2;
+/* ── MobileCartSheet ─────────────────────────────────────── */
+function MobileCartSheet({
+  cart,
+  setCart,
+  changeQuantity,
+  promoCode,
+  onPromoCodeChange,
+  promoState,
+  onApplyPromo,
+  onTogglePromoDetail,
+  totals,
+  submitting,
+  onSubmitOrder,
+  orders,
+  payments,
+  secsRemaining,
+  onOpenPayment,
+  onCancelPayment,
+  onDeleteOrder,
+  onClose,
+}) {
+  const { t } = useLanguage();
+
   return (
-    <div className={cn(
-      "fixed left-4 right-4 top-20 z-50 mx-auto flex max-w-sm items-start gap-3 rounded-2xl border bg-card px-4 py-3 text-sm text-card-foreground shadow-lg",
-      isError ? "border-destructive/30" : "border-primary/20"
-    )}>
-      <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", isError ? "text-destructive" : "text-primary")} />
-      <span className="flex-1 leading-snug">{message}</span>
-      <button type="button" onClick={onClose} className="text-muted-foreground hover:text-foreground" aria-label="Close">
-        <X className="h-4 w-4" />
-      </button>
+    <div className="fixed inset-0 z-40 flex items-end bg-black/40 backdrop-blur-sm lg:hidden" onClick={onClose}>
+      <div
+        className="bottom-sheet-animate max-h-[92vh] w-full overflow-auto rounded-t-2xl bg-card text-card-foreground shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex justify-center pt-2">
+          <div className="h-1.5 w-12 rounded-full bg-muted-foreground/30" />
+        </div>
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border/60 bg-card/95 p-4 backdrop-blur">
+          <div className="flex items-center gap-2">
+            <ShoppingBag className="h-4 w-4 text-primary" />
+            <h2 className="text-base font-bold">{t("yourOrder")}</h2>
+            {cart.length > 0 ? (
+              <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-bold text-primary-foreground">
+                {cart.length}
+              </span>
+            ) : null}
+          </div>
+          <button onClick={onClose} className="rounded-xl border border-border p-1.5 text-muted-foreground hover:text-foreground" aria-label="Close cart">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-4 p-4">
+          <div className="space-y-2">
+            {cart.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-muted/30 py-8 text-center">
+                <ShoppingBag className="h-8 w-8 text-muted-foreground/30" />
+                <p className="text-xs text-muted-foreground">{t("addDishes")}</p>
+              </div>
+            ) : (
+              cart.map((item) => (
+                <div key={item.cartId} className="flex gap-3 rounded-xl border border-border/50 bg-card p-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="text-sm font-medium leading-snug">{item.name}</h3>
+                      <button
+                        onClick={() => setCart((current) => current.filter((entry) => entry.cartId !== item.cartId))}
+                        aria-label="Remove item"
+                        className="shrink-0 rounded-md p-0.5 text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    {item.spiceLevel && item.spiceLevel !== "NORMAL" ? (
+                      <p className="mt-0.5 text-xs text-muted-foreground">{item.spiceLevel}</p>
+                    ) : null}
+                    <div className="mt-2 flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => changeQuantity(item.cartId, -1)}
+                          className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition hover:border-primary hover:text-primary"
+                          aria-label="Decrease"
+                        >
+                          <Minus className="h-3 w-3" />
+                        </button>
+                        <span className="w-6 text-center text-sm font-semibold">{item.quantity}</span>
+                        <button
+                          onClick={() => changeQuantity(item.cartId, 1)}
+                          className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition hover:border-primary hover:text-primary"
+                          aria-label="Increase"
+                        >
+                          <Plus className="h-3 w-3" />
+                        </button>
+                      </div>
+                      <span className="text-sm font-semibold">{usd(item.lineUsd)}</span>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <Input
+                value={promoCode}
+                onChange={(event) => onPromoCodeChange(event.target.value)}
+                placeholder={t("promoCode")}
+                className="h-10 rounded-xl text-sm uppercase tracking-wider"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 shrink-0 rounded-xl px-3 text-xs"
+                disabled={promoState.status === "checking"}
+                onClick={onApplyPromo}
+              >
+                <BadgePercent className="h-3.5 w-3.5" />
+                {promoState.status === "checking" ? t("checking") : t("apply")}
+              </Button>
+            </div>
+            {promoState.message ? (
+              <div className={cn(
+                "rounded-xl border px-3 py-2 text-xs",
+                promoState.status === "valid"
+                  ? "border-primary/30 bg-primary/8 text-primary"
+                  : "border-destructive/20 bg-destructive/8 text-destructive"
+              )}>
+                <div className="flex items-center justify-between gap-2">
+                  <span>{promoState.message}</span>
+                  {promoState.status === "valid" ? (
+                    <button type="button" className="font-semibold underline-offset-2 hover:underline" onClick={onTogglePromoDetail}>
+                      {promoState.showDetail ? t("hideDetail") : t("showDetail")}
+                    </button>
+                  ) : null}
+                </div>
+                {promoState.status === "valid" && promoState.showDetail ? (
+                  <div className="mt-2 space-y-1 border-t border-primary/20 pt-2 text-primary/90">
+                    <div className="font-semibold">{promoState.detail?.code}</div>
+                    {promoState.detail?.description ? <div>{promoState.detail.description}</div> : null}
+                    <div>{formatPromoValue(promoState.detail)}</div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="rounded-xl bg-muted/50 px-4 py-3">
+            <div className="mb-1 flex items-baseline justify-between">
+              <span className="text-xs text-muted-foreground">{t("subtotal")}</span>
+              <span className="text-sm font-semibold">{usd(totals.subtotalUsd)}</span>
+            </div>
+            {totals.discountUsd > 0 ? (
+              <div className="mb-1 flex items-baseline justify-between text-primary">
+                <span className="text-xs">{t("discount")}</span>
+                <span className="text-sm font-semibold">-{usd(totals.discountUsd)}</span>
+              </div>
+            ) : null}
+            <div className="flex items-baseline justify-between">
+              <span className="text-sm text-muted-foreground">{t("total")}</span>
+              <span className="text-base font-bold">{usd(totals.totalUsd)}</span>
+            </div>
+            <div className="mt-0.5 text-right text-xs text-muted-foreground">{khr(totals.totalKhr)}</div>
+          </div>
+
+          <Button
+            className="h-11 w-full rounded-xl text-sm font-semibold shadow-sm"
+            disabled={!cart.length || totals.totalUsd <= 0 || submitting}
+            onClick={onSubmitOrder}
+          >
+            {submitting ? t("placingOrder") : (
+              <>
+                <ShoppingBag className="h-4 w-4" />
+                {t("placeOrder")}
+              </>
+            )}
+          </Button>
+
+          {orders.length ? (
+            <div className="space-y-3 border-t border-border/60 pt-4">
+              <h3 className="text-sm font-bold">{t("recentOrders")}</h3>
+              {orders.map((order) => {
+                const payment = payments[order.id];
+                const secs = secsRemaining(payment);
+                const isCancelled = order.status === "CANCELLED" || payment?.status === "FAILED";
+                const isPaid = !isCancelled && (payment?.status === "PAID" || ["PAID", "RECEIVED", "PREPARING", "READY", "COMPLETED"].includes(order.status));
+                const isExpired = order.status === "EXPIRED" || payment?.status === "EXPIRED" || (payment?.status === "PENDING" && secs === 0);
+                return (
+                  <div key={order.id} className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
+                    <div className={cn(
+                      "flex items-center justify-between border-b border-border/60 px-4 py-2.5",
+                      isPaid ? "bg-primary/6" : "bg-muted/30"
+                    )}>
+                      <div>
+                        <p className="text-sm font-bold">{order.orderNumber}</p>
+                        <p className="text-xs text-muted-foreground capitalize">{order.status?.toLowerCase()}</p>
+                      </div>
+                      <span className={cn(
+                        "rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide",
+                        isPaid
+                          ? "bg-primary/15 text-primary"
+                          : isCancelled
+                          ? "bg-destructive/10 text-destructive"
+                          : isExpired
+                          ? "bg-destructive/10 text-destructive"
+                          : payment
+                          ? "bg-secondary/20 text-secondary-foreground"
+                          : "bg-muted text-muted-foreground"
+                      )}>
+                        {isPaid ? t("paid") : isCancelled ? t("cancelled") : isExpired ? t("expired") : payment ? t("pending") : t("unpaid")}
+                      </span>
+                    </div>
+                    <div className="space-y-3 p-4">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-base font-bold">{displayUsd(order.totalUsd)}</span>
+                        <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
+                      </div>
+                      {isCancelled ? (
+                        <>
+                          <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
+                            {t("orderCancelled")}
+                          </div>
+                          <Button
+                            className="h-9 w-full rounded-xl text-sm"
+                            variant="outline"
+                            onClick={() => onDeleteOrder(order.id)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            {t("deleteOrder")}
+                          </Button>
+                        </>
+                      ) : isPaid ? (
+                        <a
+                          href={`${API_BASE}/api/receipts/orders/${order.id}.pdf`}
+                          target="_blank"
+                          className="flex items-center justify-center gap-1.5 text-sm font-medium text-primary hover:underline"
+                        >
+                          {t("openReceipt")}
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </a>
+                      ) : (
+                        <div className="grid gap-2">
+                          {isExpired ? (
+                            <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
+                              {t("qrExpiredShort")}
+                            </div>
+                          ) : null}
+                          <Button
+                            className="h-9 w-full rounded-xl text-sm"
+                            variant="secondary"
+                            onClick={() => {
+                              onClose();
+                              onOpenPayment(order.id);
+                            }}
+                          >
+                            <Zap className="h-3.5 w-3.5" />
+                            {payment && !isExpired ? t("viewPaymentQr") : t("payWithBakong")}
+                          </Button>
+                          <Button
+                            className="h-9 w-full rounded-xl text-sm"
+                            variant="outline"
+                            onClick={() => onCancelPayment(order.id)}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                            {t("cancelPayment")}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
 
 /* ── PaymentModal ─────────────────────────────────────────── */
-function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) {
+function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, onCancel }) {
+  const { t } = useLanguage();
   const isPaid = payment.status === "PAID";
   const isExpired = payment.status === "EXPIRED" || secondsRemaining === 0;
 
   return (
     <div className="fixed inset-0 z-40 flex items-end bg-black/40 backdrop-blur-sm sm:items-center sm:p-4">
-      <div className="w-full max-h-[92vh] overflow-auto rounded-t-2xl bg-card text-card-foreground shadow-xl sm:mx-auto sm:max-w-md sm:rounded-2xl">
+      <div className="bottom-sheet-animate w-full max-h-[92vh] overflow-auto rounded-t-2xl bg-card text-card-foreground shadow-xl sm:mx-auto sm:max-w-md sm:rounded-2xl">
         {/* Modal header */}
         <div className="flex items-start justify-between gap-4 border-b border-border/60 p-5">
           <div>
-            <h2 className="text-lg font-bold">{isPaid ? "Payment received ✓" : "Scan to pay"}</h2>
+            <h2 className="text-lg font-bold">{isPaid ? t("paymentReceived") : t("scanToPay")}</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {order?.orderNumber} · {payment.paymentNumber}
             </p>
@@ -713,7 +1235,7 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
 
         <div className="space-y-4 p-5 text-center">
           {!isPaid ? (
-            <div className="mx-auto inline-flex rounded-2xl border border-border bg-white p-4 shadow-sm">
+            <div className="mx-auto inline-flex rounded-2xl border border-border bg-white p-4 shadow-sm" data-payment-qr={payment.id}>
               <QRCodeSVG value={payment.khqrString} size={220} includeMargin level="M" />
             </div>
           ) : (
@@ -723,7 +1245,7 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
           )}
 
           <div>
-            <p className="text-xl font-bold">{usd(payment.amountUsd)}</p>
+            <p className="text-xl font-bold">{displayUsd(payment.amountUsd)}</p>
             <p className="text-sm text-muted-foreground">{khr(payment.amountKhr)}</p>
           </div>
 
@@ -736,13 +1258,13 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
               : "bg-muted text-muted-foreground"
           )}>
             {isPaid
-              ? "Payment confirmed — order sent to kitchen 🎉"
+              ? t("paymentConfirmed")
               : isExpired
-              ? "QR has expired. Close and request a new one."
+              ? t("qrExpired")
               : (
                 <span className="flex items-center justify-center gap-2">
                   <Clock className="h-4 w-4" />
-                  Expires in {formatDuration(secondsRemaining)}
+                  {t("expiresIn")} {formatDuration(secondsRemaining)}
                 </span>
               )}
           </div>
@@ -753,12 +1275,22 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
               target="_blank"
               className="flex items-center justify-center gap-1.5 text-sm font-semibold text-primary hover:underline"
             >
-              Download receipt <ChevronRight className="h-4 w-4" />
+              {t("downloadReceipt")} <ChevronRight className="h-4 w-4" />
             </a>
           ) : !isExpired ? (
-            <Button type="button" variant="outline" className="h-10 w-full rounded-xl text-sm" onClick={onRefresh}>
-              Check payment status
-            </Button>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button type="button" variant="outline" className="h-10 rounded-xl text-sm" onClick={() => downloadPaymentQrImage(order, payment)}>
+                <Download className="h-4 w-4" />
+                {t("saveImage")}
+              </Button>
+              <Button type="button" variant="outline" className="h-10 rounded-xl text-sm" onClick={onRefresh}>
+                {t("checkPaymentStatus")}
+              </Button>
+              <Button type="button" variant="outline" className="h-10 rounded-xl text-sm sm:col-span-2" onClick={onCancel}>
+                <X className="h-4 w-4" />
+                {t("cancelPayment")}
+              </Button>
+            </div>
           ) : null}
         </div>
       </div>
@@ -768,6 +1300,7 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
 
 /* ── CustomizeItem ────────────────────────────────────────── */
 function CustomizeItem({ item, addons, options, onClose, onAdd }) {
+  const { t } = useLanguage();
   const [quantity, setQuantity] = useState(1);
   const [spiceLevel, setSpiceLevel] = useState("NORMAL");
   const [selectedOptions, setSelectedOptions] = useState([]);
@@ -799,7 +1332,7 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
 
   return (
     <div className="fixed inset-0 z-30 flex items-end bg-black/40 backdrop-blur-sm sm:items-center sm:p-4">
-      <div className="max-h-[92vh] w-full overflow-auto rounded-t-2xl bg-card text-card-foreground shadow-xl sm:mx-auto sm:max-w-lg sm:rounded-2xl">
+      <div className="bottom-sheet-animate max-h-[92vh] w-full overflow-auto rounded-t-2xl bg-card text-card-foreground shadow-xl sm:mx-auto sm:max-w-lg sm:rounded-2xl">
         {/* Item header */}
         <div className="relative">
           <div className="aspect-[3/1] overflow-hidden bg-muted">
@@ -902,7 +1435,7 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
 
           <div>
             <h3 className="mb-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              Special instructions
+              {t("specialInstructions")}
             </h3>
             <Textarea
               value={specialInstructions}
@@ -942,7 +1475,7 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
         {/* Footer actions */}
         <div className="flex gap-2.5 border-t border-border/60 p-4">
           <Button variant="outline" className="h-11 flex-1 rounded-xl" onClick={onClose}>
-            Cancel
+            {t("cancel")}
           </Button>
           <Button
             className="h-11 flex-1 rounded-xl font-semibold shadow-sm"
@@ -960,7 +1493,7 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
               })
             }
           >
-            Add to cart · {usd(lineUsd)}
+            {t("addToCart")} · {usd(lineUsd)}
           </Button>
         </div>
       </div>
@@ -969,6 +1502,46 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
 }
 
 /* ── Helpers ──────────────────────────────────────────────── */
+function customerStorageKey(tableNumber, bucket) {
+  return `happyboat.customer.${tableNumber}.${bucket}`;
+}
+
+function readCustomerStorage(key, fallback) {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.expiresAt <= Date.now()) {
+      window.localStorage.removeItem(key);
+      return fallback;
+    }
+    return parsed.value ?? fallback;
+  } catch {
+    window.localStorage.removeItem(key);
+    return fallback;
+  }
+}
+
+function writeCustomerStorage(key, value) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify({
+      expiresAt: Date.now() + CUSTOMER_STORAGE_TTL_MS,
+      value,
+    }));
+  } catch {
+    // Local storage can be blocked by the browser. The app should still work.
+  }
+}
+
+function upsertById(items, item) {
+  const exists = items.some((entry) => entry.id === item.id);
+  return exists
+    ? items.map((entry) => (entry.id === item.id ? { ...entry, ...item } : entry))
+    : [item, ...items];
+}
+
 function groupBy(items, key) {
   return items.reduce((groups, item) => {
     const value = item[key];
@@ -993,6 +1566,73 @@ function isPromoCodeError(error, promoCode) {
   if (!promoCode?.trim()) return false;
   const text = String(error?.message || "").toLowerCase();
   return text.includes("promo") || text.includes("bad request") || text.includes("400");
+}
+
+function promoDiscountForSubtotal(promo, subtotalUsd) {
+  if (!promo) return 0;
+  const subtotal = Number(subtotalUsd || 0);
+  const value = Number(promo.discountValue || 0);
+  const rawDiscount = promo.discountType === "PERCENT" ? subtotal * (value / 100) : value;
+  const cappedDiscount = promo.discountType === "PERCENT" && promo.maxDiscountUsd != null
+    ? Math.min(rawDiscount, Number(promo.maxDiscountUsd || 0))
+    : rawDiscount;
+  return Math.min(subtotal, Math.max(0, Number(cappedDiscount.toFixed(2))));
+}
+
+function formatPromoValue(promo) {
+  if (!promo) return "";
+  if (promo.discountType === "PERCENT") {
+    const maxDiscount = promo.maxDiscountUsd == null ? "" : `, max ${usd(promo.maxDiscountUsd)}`;
+    return `${Number(promo.discountValue || 0).toFixed(2)}% off${maxDiscount}`;
+  }
+  return `${usd(promo.discountValue)} off`;
+}
+
+function downloadPaymentQrImage(order, payment) {
+  const svg = document.querySelector(`[data-payment-qr="${payment.id}"] svg`);
+  if (!svg) return;
+
+  const svgText = new XMLSerializer().serializeToString(svg);
+  const svgUrl = URL.createObjectURL(new Blob([svgText], { type: "image/svg+xml;charset=utf-8" }));
+  const image = new Image();
+  image.onload = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 360;
+    canvas.height = 430;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      URL.revokeObjectURL(svgUrl);
+      return;
+    }
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#111827";
+    ctx.font = "700 20px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("HappyBoat KHQR", canvas.width / 2, 42);
+    ctx.font = "500 13px sans-serif";
+    ctx.fillStyle = "#4b5563";
+    ctx.fillText(`${order?.orderNumber || "Order"} · ${payment.paymentNumber}`, canvas.width / 2, 67);
+    ctx.drawImage(image, 70, 92, 220, 220);
+    ctx.font = "700 18px sans-serif";
+    ctx.fillStyle = "#111827";
+    ctx.fillText(displayUsd(payment.amountUsd), canvas.width / 2, 345);
+    ctx.font = "500 13px sans-serif";
+    ctx.fillStyle = "#4b5563";
+    ctx.fillText(khr(payment.amountKhr), canvas.width / 2, 368);
+    canvas.toBlob((blob) => {
+      URL.revokeObjectURL(svgUrl);
+      if (!blob) return;
+      const pngUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = pngUrl;
+      link.download = `${order?.orderNumber || payment.paymentNumber}-khqr.png`;
+      link.click();
+      URL.revokeObjectURL(pngUrl);
+    }, "image/png");
+  };
+  image.onerror = () => URL.revokeObjectURL(svgUrl);
+  image.src = svgUrl;
 }
 
 function formatDuration(seconds) {
