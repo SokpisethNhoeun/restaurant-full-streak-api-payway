@@ -609,7 +609,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
           ) : null}
 
           {/* ── Menu grid ────────────────────────────────────── */}
-          <div className="grid auto-rows-fr gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid auto-rows-fr grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-3">
             {filteredItems.map((item) => (
               <MenuCard
                 key={item.id}
@@ -999,12 +999,12 @@ function MenuCard({ item, onSelect }) {
       }}
       aria-label={`Customize ${item.name}`}
       className={cn(
-        "group flex flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-md",
+        "group flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-md sm:rounded-2xl",
         item.available ? "cursor-pointer active:scale-[0.99]" : "cursor-not-allowed opacity-75"
       )}
     >
       {/* Image */}
-      <div className="relative aspect-[16/10] overflow-hidden bg-muted">
+      <div className="relative aspect-square overflow-hidden bg-muted sm:aspect-[16/10]">
         <img
           src={displayImageUrl(item.imageUrl)}
           alt={item.name}
@@ -1013,18 +1013,18 @@ function MenuCard({ item, onSelect }) {
         />
         {!item.available ? (
           <div className="absolute inset-0 flex items-center justify-center bg-background/70 backdrop-blur-sm">
-            <span className="rounded-full bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
+            <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-semibold text-muted-foreground sm:px-3 sm:text-xs">
               Unavailable
             </span>
           </div>
         ) : null}
         {/* Dietary tags overlay */}
         {tags(item.dietaryTags).length > 0 ? (
-          <div className="absolute left-2 top-2 flex flex-wrap gap-1">
+          <div className="absolute left-1.5 top-1.5 flex flex-wrap gap-1 sm:left-2 sm:top-2">
             {tags(item.dietaryTags).slice(0, 2).map((tag) => (
               <span
                 key={tag}
-                className="rounded-full bg-background/80 px-2 py-0.5 text-[10px] font-semibold backdrop-blur-sm"
+                className="rounded-full bg-background/80 px-1.5 py-0.5 text-[9px] font-semibold backdrop-blur-sm sm:px-2 sm:text-[10px]"
               >
                 {tag}
               </span>
@@ -1034,16 +1034,16 @@ function MenuCard({ item, onSelect }) {
       </div>
 
       {/* Body */}
-      <div className="flex flex-1 flex-col p-3.5">
-        <h2 className="line-clamp-1 text-sm font-bold leading-snug">{item.name}</h2>
-        <p className="mt-1 line-clamp-2 flex-1 text-xs leading-relaxed text-muted-foreground">
+      <div className="flex flex-1 flex-col p-2.5 sm:p-3.5">
+        <h2 className="line-clamp-2 text-xs font-bold leading-snug sm:line-clamp-1 sm:text-sm">{item.name}</h2>
+        <p className="mt-1 line-clamp-2 flex-1 text-[11px] leading-snug text-muted-foreground sm:text-xs sm:leading-relaxed">
           {item.description}
         </p>
 
-        <div className="mt-3 flex items-center justify-between gap-2">
+        <div className="mt-2 flex items-center justify-between gap-2 sm:mt-3">
           <div>
-            <div className="text-sm font-bold">{displayUsd(item.priceUsd)}</div>
-            <div className="text-[10px] text-muted-foreground">{khr(item.priceKhr)}</div>
+            <div className="text-xs font-bold sm:text-sm">{displayUsd(item.priceUsd)}</div>
+            <div className="text-[9px] text-muted-foreground sm:text-[10px]">{khr(item.priceKhr)}</div>
           </div>
           <button
             onClick={(event) => {
@@ -1052,14 +1052,14 @@ function MenuCard({ item, onSelect }) {
             }}
             disabled={!item.available}
             className={cn(
-              "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition-all",
+              "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-all sm:h-8 sm:w-8 sm:rounded-xl",
               item.available
                 ? "bg-primary text-primary-foreground shadow-sm hover:opacity-90 active:scale-95"
                 : "cursor-not-allowed bg-muted text-muted-foreground"
             )}
             aria-label={`${t("addToCart")} ${item.name}`}
           >
-            <Plus className="h-4 w-4" />
+            <Plus className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
           </button>
         </div>
       </div>
@@ -1091,9 +1091,9 @@ function MobileCartSheet({
   const { t } = useLanguage();
 
   return (
-    <div className="fixed inset-0 z-40 flex items-end bg-black/40 backdrop-blur-sm lg:hidden" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex items-end overflow-hidden bg-black/40 backdrop-blur-sm lg:hidden" onClick={onClose}>
       <div
-        className="bottom-sheet-animate max-h-[92vh] w-full overflow-auto rounded-t-2xl bg-card text-card-foreground shadow-xl"
+        className="bottom-sheet-animate flex max-h-[92dvh] w-full flex-col rounded-t-2xl bg-card text-card-foreground shadow-xl"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex justify-center pt-2">
@@ -1114,7 +1114,7 @@ function MobileCartSheet({
           </button>
         </div>
 
-        <div className="space-y-4 p-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
           <div className="space-y-2">
             {cart.length === 0 ? (
               <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-muted/30 py-8 text-center">
@@ -1857,19 +1857,37 @@ function downloadPaymentQrImage(order, payment) {
     ctx.font = "500 13px sans-serif";
     ctx.fillStyle = "#4b5563";
     ctx.fillText(khr(payment.amountKhr), canvas.width / 2, 368);
-    canvas.toBlob((blob) => {
+    canvas.toBlob(async (blob) => {
       URL.revokeObjectURL(svgUrl);
       if (!blob) return;
-      const pngUrl = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = pngUrl;
-      link.download = `${order?.orderNumber || payment.paymentNumber}-khqr.png`;
-      link.click();
-      URL.revokeObjectURL(pngUrl);
+      await saveImageToPhonePhotos(blob, `${order?.orderNumber || payment.paymentNumber}-khqr.png`);
     }, "image/png");
   };
   image.onerror = () => URL.revokeObjectURL(svgUrl);
   image.src = svgUrl;
+}
+
+async function saveImageToPhonePhotos(blob, filename) {
+  const file = new File([blob], filename, { type: "image/png" });
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({
+        files: [file],
+        title: "HappyBoat KHQR",
+        text: "Save this KHQR image to Photos."
+      });
+      return;
+    } catch {
+      // Fall back to a regular download if sharing is cancelled or unavailable.
+    }
+  }
+
+  const pngUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = pngUrl;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(pngUrl);
 }
 
 function formatDuration(seconds) {

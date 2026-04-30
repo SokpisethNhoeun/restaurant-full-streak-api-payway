@@ -48,6 +48,7 @@ const PAYMENT_FILTERS = [
 
 const DASHBOARD_SESSION_HINT = "happyboat-dashboard-session";
 const DASHBOARD_TOKEN_KEY = "happyboat-dashboard-token";
+const DONUT_COLORS = ["#0f8a7f", "#f59e0b", "#2563eb", "#dc2626", "#7c3aed", "#059669"];
 
 function readDashboardToken() {
   if (typeof window === "undefined") return null;
@@ -67,7 +68,7 @@ function clearDashboardSession() {
 }
 
 export default function DashboardApp() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [credentials, setCredentials] = useState({ username: "admin", password: "admin123" });
   const [signedIn, setSignedIn] = useState(false);
   const [tab, setTab] = useState("orders");
@@ -85,6 +86,7 @@ export default function DashboardApp() {
   const audioRef = useRef(null);
   const ordersRef = useRef([]);
   const selectedOrderRef = useRef(null);
+  const notifiedOrderToastRef = useRef(new Set());
 
   useEffect(() => {
     ordersRef.current = orders;
@@ -308,6 +310,7 @@ export default function DashboardApp() {
         if (navigator.vibrate) {
           navigator.vibrate([180, 70, 180, 220, 180]);
         }
+        window.setTimeout(speakOrderAlert, 220);
       };
       if (ctx.state === "suspended") {
         ctx.resume().then(() => {
@@ -328,17 +331,37 @@ export default function DashboardApp() {
     window.setTimeout(playSound, 50);
   }
 
+  function speakOrderAlert() {
+    try {
+      if (!("speechSynthesis" in window)) return;
+      const utterance = new SpeechSynthesisUtterance(t("receivedOrderVoice"));
+      utterance.lang = language === "km" ? "km-KH" : "en-US";
+      utterance.rate = language === "km" ? 0.9 : 0.95;
+      utterance.volume = 1;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      // Speech output is best-effort.
+    }
+  }
+
   function shouldNotifyOrder(order) {
     return order.status === "PENDING_PAYMENT" || order.status === "RECEIVED";
   }
 
   function notifyOrderToast(order) {
+    const toastKey = `${order.id || order.orderNumber}:${order.status}`;
+    if (notifiedOrderToastRef.current.has(toastKey)) return;
+    notifiedOrderToastRef.current.add(toastKey);
+    if (notifiedOrderToastRef.current.size > 100) {
+      notifiedOrderToastRef.current = new Set([...notifiedOrderToastRef.current].slice(-50));
+    }
     gooeyToast.info(t("newOrderUpdate"), goeyToastOptions({
+      id: "dashboard-order-alert",
       description: `${order.orderNumber || t("order")} · ${order.tableNumber || ""}`,
       action: order.id ? {
         label: t("showDetail"),
-        onClick: () => loadOrder(order.id),
-        successLabel: t("opened")
+        onClick: () => loadOrder(order.id)
       } : undefined
     }));
   }
@@ -392,8 +415,9 @@ export default function DashboardApp() {
               {lastUpdatedAt ? <span>{t("updated")} {formatClockTime(lastUpdatedAt)}</span> : null}
             </div>
             <LanguageToggle />
-            <Button variant="outline" size="icon" onClick={testSound} aria-label={t("testOrderSound")}>
+            <Button variant="outline" className="px-3" onClick={testSound} aria-label={t("testOrderSound")}>
               {soundReady ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+              <span className="hidden sm:inline">{t("alert")}</span>
             </Button>
             <ThemeToggle />
             <Button variant="outline" size="icon" onClick={loadAll} aria-label={t("refresh")}>
@@ -440,7 +464,7 @@ export default function DashboardApp() {
         ) : null}
 
         {tab === "analytics" ? (
-          <AnalyticsView analytics={analytics} />
+          <AnalyticsView analytics={analytics} lastUpdatedAt={lastUpdatedAt} onRefresh={loadAnalytics} />
         ) : null}
       </div>
     </main>
@@ -587,7 +611,6 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus }) {
         </div>
 
         <CardContent className="space-y-3 pt-3">
-          <OrderStatusSummary orders={orders} />
           {displayedOrders.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t("noOrdersFilter")}</p>
           ) : (
@@ -686,25 +709,6 @@ function MobileOrderSheet({ selectedOrder, onStatus, onClose }) {
           <OrderDetailContent selectedOrder={selectedOrder} onStatus={onStatus} />
         </div>
       </div>
-    </div>
-  );
-}
-
-function OrderStatusSummary({ orders }) {
-  const statuses = ["PENDING_PAYMENT", "RECEIVED", "PREPARING", "READY"];
-  const counts = statuses.map((status) => ({
-    status,
-    count: orders.filter((order) => order.status === status).length
-  }));
-
-  return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-      {counts.map((entry) => (
-        <div key={entry.status} className="rounded-md border border-border bg-muted/30 px-3 py-2">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{entry.status.replace("_", " ")}</div>
-          <div className="mt-1 text-xl font-bold">{entry.count}</div>
-        </div>
-      ))}
     </div>
   );
 }
@@ -1273,26 +1277,86 @@ function PromoCodesView({ promos, request, reload }) {
 
 // Analytics
 
-function AnalyticsView({ analytics }) {
+function AnalyticsView({ analytics, lastUpdatedAt, onRefresh }) {
   const { t } = useLanguage();
-  if (!analytics) return null;
+  if (!analytics) {
+    return (
+      <Card>
+        <CardContent className="flex min-h-48 items-center justify-center text-sm text-muted-foreground">
+          {t("loadingMenu")}
+        </CardContent>
+      </Card>
+    );
+  }
+
   const dailyOrders = Number(analytics.daily?.dailyOrderCount || 0);
   const weeklyOrders = Number(analytics.weekly?.weeklyOrderCount || 0);
+  const dailyRevenue = Number(analytics.daily?.dailyRevenueUsd || 0);
+  const weeklyRevenue = Number(analytics.weekly?.weeklyRevenueUsd || 0);
+  const activeOrders = sumRows(analytics.orderCountByStatus, "count", (row) =>
+    ["PENDING_PAYMENT", "PAID", "RECEIVED", "PREPARING", "READY"].includes(row.status)
+  );
+  const paidPayments = sumRows(analytics.paymentBreakdown, "count", (row) => row.paymentMethod !== "UNPAID");
+  const totalPayments = sumRows(analytics.paymentBreakdown, "count");
+  const paymentRate = totalPayments ? Math.round((paidPayments / totalPayments) * 100) : 0;
+  const topItem = analytics.topSellingItems?.[0];
+  const topTable = analytics.revenueByTable?.[0];
+
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold">{t("analytics")}</h2>
+          <p className="text-sm text-muted-foreground">
+            {lastUpdatedAt ? `${t("updated")} ${formatClockTime(lastUpdatedAt)}` : t("liveRestaurantOps")}
+          </p>
+        </div>
+        <Button variant="outline" onClick={onRefresh}>
+          <RefreshCw className="h-4 w-4" />
+          {t("refresh")}
+        </Button>
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric title={t("dailyRevenue")} value={usd(analytics.daily?.dailyRevenueUsd)} sub={`${dailyOrders} ${t("orders")} · ${khr(analytics.daily?.dailyRevenueKhr)}`} />
-        <Metric title={t("weeklyRevenue")} value={usd(analytics.weekly?.weeklyRevenueUsd)} sub={`${weeklyOrders} ${t("orders")} · ${khr(analytics.weekly?.weeklyRevenueKhr)}`} />
-        <Metric title={t("averageOrder")} value={usd(analytics.averageOrderValue?.averageOrderValueUsd)} sub={khr(analytics.averageOrderValue?.averageOrderValueKhr)} />
-        <Metric title={t("payments")} value={String((analytics.paymentBreakdown || []).reduce((sum, row) => sum + Number(row.count || 0), 0))} sub={t("transactionLog")} />
+        <Metric icon={CalendarDays} title={t("dailyRevenue")} value={usd(dailyRevenue)} sub={`${dailyOrders} ${t("orders")} · ${khr(analytics.daily?.dailyRevenueKhr)}`} tone="primary" />
+        <Metric icon={BarChart3} title={t("weeklyRevenue")} value={usd(weeklyRevenue)} sub={`${weeklyOrders} ${t("orders")} · ${khr(analytics.weekly?.weeklyRevenueKhr)}`} tone="accent" />
+        <Metric icon={CreditCard} title={t("averageOrder")} value={usd(analytics.averageOrderValue?.averageOrderValueUsd)} sub={khr(analytics.averageOrderValue?.averageOrderValueKhr)} tone="secondary" />
+        <Metric icon={Clock} title="Active orders" value={String(activeOrders)} sub={`${paymentRate}% paid payments`} tone="muted" />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <ItemDonutChart rows={analytics.topSellingItems} />
+        <PaidRevenueLineChart rows={analytics.paidRevenueByDay} />
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
+        <Card>
+          <CardHeader className="flex-row items-center justify-between gap-3">
+            <CardTitle>{t("sortStatus")}</CardTitle>
+            <Badge tone="secondary">{activeOrders} active</Badge>
+          </CardHeader>
+          <CardContent>
+            <StatusFunnel rows={analytics.orderCountByStatus} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Highlights</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            <HighlightRow icon={Utensils} label={t("topItems")} value={topItem?.itemName || "-"} sub={topItem ? `${topItem.quantity} sold · ${usd(topItem.revenueUsd)}` : "-"} />
+            <HighlightRow icon={Table2} label={t("revenueByTable")} value={topTable?.tableNumber || "-"} sub={topTable ? `${topTable.orders} ${t("orders")} · ${usd(topTable.revenueUsd)}` : "-"} />
+            <HighlightRow icon={CreditCard} label={t("payments")} value={`${paymentRate}% paid`} sub={`${paidPayments}/${totalPayments || 0} payments`} />
+          </CardContent>
+        </Card>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-        <AnalyticsBarsCard title={t("topItems")} rows={analytics.topSellingItems} label="itemName" value="quantity" />
-        <AnalyticsBarsCard title={t("sortStatus")} rows={analytics.orderCountByStatus} label="status" value="count" />
-        <AnalyticsBarsCard title={t("revenueByTable")} rows={analytics.revenueByTable} label="tableNumber" value="revenueUsd" currency />
-        <ListCard title="Peak hours" rows={analytics.peakHours} label="hour" value="orders" hour />
-        <ListCard title="Payment breakdown" rows={analytics.paymentBreakdown} label="paymentMethod" value="amountUsd" currency />
+        <AnalyticsBarsCard title={t("topItems")} rows={analytics.topSellingItems} label="itemName" value="quantity" detailValue="revenueUsd" detailCurrency />
+        <AnalyticsBarsCard title={t("revenueByTable")} rows={analytics.revenueByTable} label="tableNumber" value="revenueUsd" currency detailValue="orders" />
+        <AnalyticsBarsCard title="Payment breakdown" rows={analytics.paymentBreakdown} label="paymentMethod" value="count" detailValue="amountUsd" detailCurrency />
+        <PeakHoursCard rows={analytics.peakHours} />
       </div>
     </div>
   );
@@ -1368,19 +1432,196 @@ function isSameLocalDate(value, targetDate) {
   return dateInputValue(value) === targetDate;
 }
 
-function Metric({ title, value, sub }) {
+function Metric({ icon: Icon, title, value, sub, tone = "primary" }) {
+  const toneClass = {
+    primary: "bg-primary/10 text-primary",
+    secondary: "bg-secondary/20 text-secondary-foreground",
+    accent: "bg-accent/10 text-accent",
+    muted: "bg-muted text-muted-foreground"
+  }[tone] || "bg-primary/10 text-primary";
+
   return (
-    <Card>
-      <CardContent>
-        <div className="text-sm text-muted-foreground">{title}</div>
-        <div className="mt-2 text-2xl font-semibold">{value}</div>
-        <div className="text-sm text-muted-foreground">{sub}</div>
+    <Card className="overflow-hidden">
+      <CardContent className="flex items-start gap-3">
+        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${toneClass}`}>
+          <Icon className="h-5 w-5" />
+        </div>
+        <div className="min-w-0">
+          <div className="text-sm text-muted-foreground">{title}</div>
+          <div className="mt-1 text-2xl font-semibold leading-tight">{value}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{sub}</div>
+        </div>
       </CardContent>
     </Card>
   );
 }
 
-function AnalyticsBarsCard({ title, rows = [], label, value, currency }) {
+function HighlightRow({ icon: Icon, label, value, sub }) {
+  return (
+    <div className="flex items-center gap-3 rounded-md border border-border bg-muted/30 p-3">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-card">
+        <Icon className="h-4 w-4 text-primary" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-xs text-muted-foreground">{label}</div>
+        <div className="truncate text-sm font-semibold">{value}</div>
+        <div className="truncate text-xs text-muted-foreground">{sub}</div>
+      </div>
+    </div>
+  );
+}
+
+function ItemDonutChart({ rows = [] }) {
+  const totalQuantity = sumRows(rows, "quantity");
+  const segments = rows.slice(0, 6).map((row, index) => ({
+    label: row.itemName,
+    value: Number(row.quantity || 0),
+    revenueUsd: Number(row.revenueUsd || 0),
+    color: DONUT_COLORS[index % DONUT_COLORS.length]
+  })).filter((row) => row.value > 0);
+  let offset = 25;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Orders by item</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-4 sm:grid-cols-[180px_1fr] sm:items-center">
+        <div className="relative mx-auto h-44 w-44">
+          <svg viewBox="0 0 42 42" className="h-full w-full -rotate-90">
+            <circle cx="21" cy="21" r="15.915" fill="transparent" stroke="hsl(var(--muted))" strokeWidth="7" />
+            {segments.map((segment) => {
+              const percent = totalQuantity ? (segment.value / totalQuantity) * 100 : 0;
+              const circle = (
+                <circle
+                  key={segment.label}
+                  cx="21"
+                  cy="21"
+                  r="15.915"
+                  fill="transparent"
+                  stroke={segment.color}
+                  strokeWidth="7"
+                  strokeDasharray={`${percent} ${100 - percent}`}
+                  strokeDashoffset={offset}
+                />
+              );
+              offset -= percent;
+              return circle;
+            })}
+          </svg>
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+            <div className="text-2xl font-bold">{totalQuantity}</div>
+            <div className="text-xs text-muted-foreground">items sold</div>
+          </div>
+        </div>
+        <div className="space-y-2">
+          {segments.length === 0 ? (
+            <p className="text-sm text-muted-foreground">-</p>
+          ) : segments.map((segment) => (
+            <div key={segment.label} className="flex items-center justify-between gap-3 rounded-md bg-muted/40 px-3 py-2 text-sm">
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: segment.color }} />
+                <span className="truncate">{segment.label}</span>
+              </span>
+              <span className="shrink-0 font-semibold">{segment.value}</span>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function PaidRevenueLineChart({ rows = [] }) {
+  const points = rows.map((row) => ({
+    day: row.day,
+    paidUsd: Number(row.paidUsd || 0),
+    payments: Number(row.payments || 0)
+  }));
+  const maxValue = Math.max(1, ...points.map((point) => point.paidUsd));
+  const width = 320;
+  const height = 150;
+  const chartTop = 18;
+  const chartBottom = 124;
+  const chartHeight = chartBottom - chartTop;
+  const xStep = points.length > 1 ? width / (points.length - 1) : width;
+  const svgPoints = points.map((point, index) => {
+    const x = index * xStep;
+    const y = chartBottom - (point.paidUsd / maxValue) * chartHeight;
+    return { ...point, x, y };
+  });
+  const linePath = svgPoints.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
+  const totalPaid = points.reduce((sum, point) => sum + point.paidUsd, 0);
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between gap-3">
+        <CardTitle>Paid revenue by day</CardTitle>
+        <Badge tone="primary">{usd(totalPaid)}</Badge>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <svg viewBox={`0 0 ${width} ${height}`} className="h-48 w-full overflow-visible">
+          <line x1="0" y1={chartBottom} x2={width} y2={chartBottom} stroke="hsl(var(--border))" strokeWidth="1" />
+          <line x1="0" y1={chartTop} x2={width} y2={chartTop} stroke="hsl(var(--border))" strokeWidth="1" strokeDasharray="4 6" />
+          {linePath ? (
+            <path d={linePath} fill="none" stroke="hsl(var(--primary))" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          ) : null}
+          {svgPoints.map((point, index) => (
+            <g key={point.day || index}>
+              <circle cx={point.x} cy={point.y} r="4" fill="hsl(var(--primary))" />
+              {(index === 0 || index === svgPoints.length - 1 || index % 3 === 0) ? (
+                <text x={point.x} y="145" textAnchor={index === 0 ? "start" : index === svgPoints.length - 1 ? "end" : "middle"} className="fill-muted-foreground text-[10px]">
+                  {formatShortDay(point.day)}
+                </text>
+              ) : null}
+            </g>
+          ))}
+        </svg>
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          <div className="rounded-md bg-muted/40 px-3 py-2">
+            <div className="text-xs text-muted-foreground">Peak day</div>
+            <div className="font-semibold">{formatShortDay(maxBy(points, "paidUsd")?.day)} · {usd(maxBy(points, "paidUsd")?.paidUsd)}</div>
+          </div>
+          <div className="rounded-md bg-muted/40 px-3 py-2">
+            <div className="text-xs text-muted-foreground">Last day</div>
+            <div className="font-semibold">{usd(points.at(-1)?.paidUsd)} · {points.at(-1)?.payments || 0} paid</div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function StatusFunnel({ rows = [] }) {
+  const orderedStatuses = ["PENDING_PAYMENT", "PAID", "RECEIVED", "PREPARING", "READY", "COMPLETED", "CANCELLED", "EXPIRED", "REJECTED"];
+  const sortedRows = [...rows].sort((a, b) => orderedStatuses.indexOf(a.status) - orderedStatuses.indexOf(b.status));
+  const maxValue = Math.max(1, ...sortedRows.map((row) => Number(row.count || 0)));
+
+  if (sortedRows.length === 0) {
+    return <p className="text-sm text-muted-foreground">-</p>;
+  }
+
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {sortedRows.map((row) => {
+        const count = Number(row.count || 0);
+        return (
+          <div key={row.status} className="rounded-md border border-border bg-card p-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <StatusBadge status={row.status} />
+              <span className="text-lg font-semibold">{count}</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-muted">
+              <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(5, (count / maxValue) * 100)}%` }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function AnalyticsBarsCard({ title, rows = [], label, value, currency, detailValue, detailCurrency }) {
   const maxValue = Math.max(1, ...rows.map((row) => Number(row[value] || 0)));
   return (
     <Card>
@@ -1390,12 +1631,18 @@ function AnalyticsBarsCard({ title, rows = [], label, value, currency }) {
           <p className="text-sm text-muted-foreground">-</p>
         ) : rows.map((row) => {
           const amount = Number(row[value] || 0);
+          const detail = detailValue == null ? null : row[detailValue];
           return (
             <div key={row[label]} className="space-y-1.5">
               <div className="flex justify-between gap-3 text-sm">
                 <span className="min-w-0 truncate">{row[label]}</span>
                 <span className="shrink-0 font-semibold">{currency ? usd(amount) : amount}</span>
               </div>
+              {detailValue != null ? (
+                <div className="text-xs text-muted-foreground">
+                  {detailCurrency ? usd(detail) : `${detail} ${detailValue === "orders" ? "orders" : ""}`}
+                </div>
+              ) : null}
               <div className="h-2 overflow-hidden rounded-full bg-muted">
                 <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(4, (amount / maxValue) * 100)}%` }} />
               </div>
@@ -1407,22 +1654,56 @@ function AnalyticsBarsCard({ title, rows = [], label, value, currency }) {
   );
 }
 
-function ListCard({ title, rows = [], label, value, currency, hour }) {
+function PeakHoursCard({ rows = [] }) {
+  const maxValue = Math.max(1, ...rows.map((row) => Number(row.orders || 0)));
   return (
     <Card>
-      <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
-      <CardContent className="space-y-2">
+      <CardHeader><CardTitle>Peak hours</CardTitle></CardHeader>
+      <CardContent className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2">
         {rows.length === 0 ? (
-          <p className="text-sm text-muted-foreground">-</p>
-        ) : rows.map((row) => (
-          <div key={row[label]} className="flex justify-between rounded-md bg-muted px-3 py-2 text-sm">
-            <span>{hour ? `${String(row[label]).padStart(2, "0")}:00` : row[label]}</span>
-            <span className="font-semibold">{currency ? usd(row[value]) : row[value]}</span>
-          </div>
-        ))}
+          <p className="col-span-full text-sm text-muted-foreground">-</p>
+        ) : rows.map((row) => {
+          const orders = Number(row.orders || 0);
+          return (
+            <div key={row.hour} className="rounded-md border border-border bg-muted/30 p-3">
+              <div className="flex items-center justify-between gap-2 text-sm">
+                <span className="font-semibold">{formatHour(row.hour)}</span>
+                <span className="text-muted-foreground">{orders}</span>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-background">
+                <div className="h-full rounded-full bg-secondary" style={{ width: `${Math.max(6, (orders / maxValue) * 100)}%` }} />
+              </div>
+            </div>
+          );
+        })}
       </CardContent>
     </Card>
   );
+}
+
+function sumRows(rows = [], key, predicate = () => true) {
+  return rows
+    .filter(predicate)
+    .reduce((sum, row) => sum + Number(row[key] || 0), 0);
+}
+
+function formatHour(hour) {
+  const normalized = Number(hour || 0);
+  return `${String(normalized).padStart(2, "0")}:00`;
+}
+
+function formatShortDay(value) {
+  if (!value) return "-";
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function maxBy(rows = [], key) {
+  return rows.reduce((best, row) => {
+    if (!best) return row;
+    return Number(row[key] || 0) > Number(best[key] || 0) ? row : best;
+  }, null);
 }
 
 // Utilities
