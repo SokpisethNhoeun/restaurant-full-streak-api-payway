@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input, Select, Textarea } from '@/components/ui/input';
 import { API_BASE, api } from '@/lib/api';
-import { AbaBankLogo, AcledaBankLogo, ChipMongBankLogo } from '@/lib/bank-logo';
 import { goeyToastOptions } from '@/lib/goey-toast-options';
 import { cn, displayUsd, khr, tags, usd } from '@/lib/utils';
 import { gooeyToast } from 'goey-toast';
@@ -43,11 +42,6 @@ const PRICE_FILTERS = [
 const CUSTOMER_STORAGE_TTL_MS = 12 * 60 * 60 * 1000;
 const MIN_CART_TOTAL_USD = 0.01;
 const CUSTOMER_ALERT_AFTER_MS = 10 * 60 * 1000;
-const PAYMENT_APPS = [
-  { id: 'aba', name: 'ABA Bank', Logo: AbaBankLogo },
-  { id: 'acleda', name: 'ACLEDA', Logo: AcledaBankLogo },
-  { id: 'chipmong', name: 'Chip Mong', Logo: ChipMongBankLogo },
-];
 
 export default function CustomerOrderingApp({ tableNumber }) {
   const { t } = useLanguage();
@@ -1723,19 +1717,15 @@ function CustomerOrderProgress({ status }) {
 function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) {
   const { t } = useLanguage();
   const [showQr, setShowQr] = useState(false);
-  const [selectedPaymentAppId, setSelectedPaymentAppId] = useState(PAYMENT_APPS[0].id);
   const [openingPaymentApp, setOpeningPaymentApp] = useState(false);
   const [fallbackMessage, setFallbackMessage] = useState('');
   const fallbackTimerRef = useRef(null);
   const visibilityChangedRef = useRef(false);
   const isPaid = payment.status === 'PAID';
   const isExpired = payment.status === 'EXPIRED' || secondsRemaining === 0;
-  const selectedPaymentApp =
-    PAYMENT_APPS.find((app) => app.id === selectedPaymentAppId) || PAYMENT_APPS[0];
 
   useEffect(() => {
     setShowQr(false);
-    setSelectedPaymentAppId(PAYMENT_APPS[0].id);
     setOpeningPaymentApp(false);
     setFallbackMessage('');
     return () => {
@@ -1821,11 +1811,8 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
           {!isPaid && !isExpired && !showQr ? (
             <PaymentOptionsStep
               payment={payment}
-              apps={PAYMENT_APPS}
-              selectedPaymentAppId={selectedPaymentAppId}
               openingPaymentApp={openingPaymentApp}
               fallbackMessage={fallbackMessage}
-              onSelectPaymentApp={setSelectedPaymentAppId}
               onOpenPaymentApp={openPaymentApp}
               onShowQr={() => {
                 setFallbackMessage('');
@@ -1963,16 +1950,12 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
 
 function PaymentOptionsStep({
   payment,
-  apps,
-  selectedPaymentAppId,
   openingPaymentApp,
   fallbackMessage,
-  onSelectPaymentApp,
   onOpenPaymentApp,
   onShowQr,
 }) {
   const { t } = useLanguage();
-  const selectedApp = apps.find((app) => app.id === selectedPaymentAppId) || apps[0];
 
   return (
     <div className="space-y-4 text-left">
@@ -1983,35 +1966,7 @@ function PaymentOptionsStep({
       </div>
 
       <div className="space-y-2">
-        <p className="text-xs font-semibold uppercase text-muted-foreground">{t('chooseBankApp')}</p>
-        <div className="grid gap-2">
-          {apps.map((app) => {
-            const Logo = app.Logo;
-            const selected = selectedPaymentAppId === app.id;
-            return (
-              <label
-                key={app.id}
-                className={cn(
-                  'flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 transition',
-                  selected
-                    ? 'border-primary bg-primary/8 ring-1 ring-primary/30'
-                    : 'border-border bg-card hover:border-primary/50'
-                )}
-              >
-                <input
-                  type="radio"
-                  name="payment-app"
-                  value={app.id}
-                  checked={selected}
-                  onChange={() => onSelectPaymentApp(app.id)}
-                  className="h-4 w-4 accent-primary"
-                />
-                <Logo className="h-9 w-9" />
-                <span className="text-sm font-semibold">{app.name}</span>
-              </label>
-            );
-          })}
-        </div>
+        <p className="text-xs font-semibold uppercase text-muted-foreground">{t('choosePaymentMethod')}</p>
       </div>
 
       <div className="grid gap-2 sm:grid-cols-2">
@@ -2022,9 +1977,7 @@ function PaymentOptionsStep({
           onClick={onOpenPaymentApp}
         >
           <Smartphone className="h-7 w-7" />
-          {openingPaymentApp
-            ? t('openingBank')
-            : `${t('openBankApp')} ${selectedApp?.name || ''}`}
+          {openingPaymentApp ? t('openingBank') : t('openPaymentLink')}
         </Button>
         <Button
           type="button"
@@ -2033,7 +1986,7 @@ function PaymentOptionsStep({
           onClick={onShowQr}
         >
           <QrCode className="h-7 w-7" />
-          {t('scanQrCode')}
+          {t('scanQrInstead')}
         </Button>
       </div>
 
