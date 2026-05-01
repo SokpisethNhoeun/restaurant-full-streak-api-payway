@@ -73,6 +73,14 @@ const ORDER_STATUS_FILTERS = [
   { value: 'EXPIRED', labelKey: 'expired' },
 ];
 
+const KITCHEN_TIME_FILTERS = [
+  { value: '', labelKey: 'allTimes' },
+  { value: 'under_5', labelKey: 'underFiveMinutes' },
+  { value: '5_10', labelKey: 'fiveToTenMinutes' },
+  { value: '10_20', labelKey: 'tenToTwentyMinutes' },
+  { value: '20_plus', labelKey: 'twentyPlusMinutes' },
+];
+
 const DASHBOARD_SESSION_HINT = 'happyboat-dashboard-session';
 const DASHBOARD_TOKEN_KEY = 'happyboat-dashboard-token';
 const DASHBOARD_SOUND_READY_KEY = 'happyboat-dashboard-sound-ready';
@@ -105,6 +113,7 @@ export default function DashboardApp() {
   const [orders, setOrders] = useState([]);
   const [kitchenItems, setKitchenItems] = useState([]);
   const [kitchenItemStatus, setKitchenItemStatus] = useState({});
+  const [updatingKitchenItemIds, setUpdatingKitchenItemIds] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [menu, setMenu] = useState({ categories: [], items: [], addons: [], options: [] });
   const [tables, setTables] = useState([]);
@@ -279,6 +288,7 @@ export default function DashboardApp() {
   async function loadKitchen() {
     const data = await request('/api/admin/orders/kitchen');
     setKitchenItems(data);
+    setKitchenItemStatus({});
     setLastUpdatedAt(new Date());
     return data;
   }
@@ -409,24 +419,60 @@ export default function DashboardApp() {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     });
-    const nextOrders = upsertById(ordersRef.current, data);
-    ordersRef.current = nextOrders;
-    setOrders(nextOrders);
-    setSelectedOrder(data);
+    mergeOrderDetail(data, { forceSelect: true });
     loadKitchen().catch(() => {});
   }
 
-  function updateOrderItemKitchenStatus(orderItemId, status) {
-    updateLocalKitchenStatus([orderItemId], status);
+  async function updateOrderItemKitchenStatus(orderItemId, status) {
+    await updateKitchenItemsStatus([orderItemId], status);
   }
 
-  function updateKitchenGroupStatus(itemIds, status) {
-    updateLocalKitchenStatus(itemIds, status);
+  async function updateKitchenGroupStatus(itemIds, status) {
+    await updateKitchenItemsStatus(itemIds, status);
+  }
+
+  async function updateKitchenItemsStatus(itemIds, status) {
+    const ids = Array.isArray(itemIds) ? itemIds : [itemIds];
+    updateLocalKitchenStatus(ids, status);
+    setKitchenItemsUpdating(ids, true);
+    try {
+      for (const itemId of ids) {
+        const detail = await request(`/api/admin/orders/items/${itemId}/kitchen-status`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status }),
+        });
+        mergeOrderDetail(detail);
+      }
+      await loadKitchen();
+    } catch (error) {
+      setMessage(error.message || 'Kitchen status update failed');
+      await loadKitchen().catch(() => {});
+    } finally {
+      setKitchenItemsUpdating(ids, false);
+    }
+  }
+
+  function mergeOrderDetail(order, options = {}) {
+    if (!order?.id) return;
+    const nextOrders = upsertById(ordersRef.current, order);
+    ordersRef.current = nextOrders;
+    setOrders(nextOrders);
+    if (options.forceSelect || selectedOrderRef.current?.id === order.id) {
+      setSelectedOrder(order);
+    }
+  }
+
+  function setKitchenItemsUpdating(itemIds, isUpdating) {
+    const ids = new Set(Array.isArray(itemIds) ? itemIds : [itemIds]);
+    setUpdatingKitchenItemIds((current) =>
+      isUpdating
+        ? [...new Set([...current, ...ids])]
+        : current.filter((itemId) => !ids.has(itemId))
+    );
   }
 
   function updateLocalKitchenStatus(itemIds, status) {
     const ids = Array.isArray(itemIds) ? itemIds : [itemIds];
-    const affectedOrderIds = affectedKitchenOrderIds(kitchenItems, ids);
     const nextStatus = ids.reduce(
       (next, itemId) => ({
         ...next,
@@ -435,13 +481,6 @@ export default function DashboardApp() {
       kitchenItemStatus
     );
     setKitchenItemStatus(nextStatus);
-
-    const orderIdsToComplete = affectedOrderIds.filter((orderId) =>
-      isKitchenOrderComplete(kitchenItems, nextStatus, orderId)
-    );
-    orderIdsToComplete.forEach((orderId) => {
-      updateOrderStatus(orderId, 'COMPLETED').catch(() => {});
-    });
 
     if (selectedOrderRef.current?.items) {
       setSelectedOrder((current) =>
@@ -787,6 +826,8 @@ export default function DashboardApp() {
             items={kitchenItems}
             statusMap={kitchenItemStatus}
             onGroupStatus={updateKitchenGroupStatus}
+            onItemStatus={updateOrderItemKitchenStatus}
+            updatingItemIds={updatingKitchenItemIds}
             now={dashboardNow}
           />
         ) : null}
@@ -1320,9 +1361,26 @@ function OrderDetailContent({
 
 // Kitchen
 
-function KitchenView({ items, statusMap = {}, onGroupStatus, now }) {
+function KitchenView({
+  items,
+  statusMap = {},
+  onGroupStatus,
+  onItemStatus,
+  updatingItemIds = [],
+  now,
+}) {
   const { t } = useLanguage();
-  const cards = useMemo(() => groupKitchenCards(items, statusMap), [items, statusMap]);
+  const [dateFilter, setDateFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [timeFilter, setTimeFilter] = useState('');
+  const categoryOptions = useMemo(() => kitchenCategoryOptions(items), [items]);
+  const filteredItems = useMemo(
+    () => filterKitchenItems(items, { dateFilter, categoryFilter, timeFilter }, now),
+    [items, dateFilter, categoryFilter, timeFilter, now]
+  );
+  const cards = useMemo(() => groupKitchenCards(filteredItems, statusMap), [filteredItems, statusMap]);
+  const updatingItemIdSet = useMemo(() => new Set(updatingItemIds), [updatingItemIds]);
+  const hasFilters = Boolean(dateFilter || categoryFilter || timeFilter);
 
   return (
     <div className="space-y-4">
@@ -1334,20 +1392,68 @@ function KitchenView({ items, statusMap = {}, onGroupStatus, now }) {
         <Badge tone="primary">{cards.length}</Badge>
       </div>
 
+      <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+        <Input
+          type="date"
+          value={dateFilter}
+          onChange={(event) => setDateFilter(event.target.value)}
+          aria-label={t('allDates')}
+        />
+        <Select
+          value={categoryFilter}
+          onChange={(event) => setCategoryFilter(event.target.value)}
+          aria-label={t('category')}
+        >
+          <option value="">{t('allCategories')}</option>
+          {categoryOptions.map((category) => (
+            <option key={category} value={category}>
+              {category}
+            </option>
+          ))}
+        </Select>
+        <Select
+          value={timeFilter}
+          onChange={(event) => setTimeFilter(event.target.value)}
+          aria-label={t('allTimes')}
+        >
+          {KITCHEN_TIME_FILTERS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {t(option.labelKey)}
+            </option>
+          ))}
+        </Select>
+        <Button
+          type="button"
+          variant="outline"
+          className="h-10 whitespace-nowrap px-3 text-xs"
+          disabled={!hasFilters}
+          onClick={() => {
+            setDateFilter('');
+            setCategoryFilter('');
+            setTimeFilter('');
+          }}
+        >
+          <Filter className="h-4 w-4" />
+          {t('clearFilters')}
+        </Button>
+      </div>
+
       {cards.length === 0 ? (
         <Card>
           <CardContent className="flex min-h-48 items-center justify-center text-sm text-muted-foreground">
-            {t('noKitchenItems')}
+            {hasFilters ? t('noOrdersFilter') : t('noKitchenItems')}
           </CardContent>
         </Card>
       ) : (
-        <div className="grid auto-rows-fr gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
           {cards.map((item) => (
             <KitchenItemCard
               key={item.key}
               item={item}
               now={now}
               onGroupStatus={onGroupStatus}
+              onItemStatus={onItemStatus}
+              updatingItemIds={updatingItemIdSet}
             />
           ))}
         </div>
@@ -1356,10 +1462,19 @@ function KitchenView({ items, statusMap = {}, onGroupStatus, now }) {
   );
 }
 
-function KitchenItemCard({ item, now, onGroupStatus }) {
+function KitchenItemCard({ item, now, onGroupStatus, onItemStatus, updatingItemIds }) {
   const { t } = useLanguage();
   const imageUrl = displayImageUrl(item.imageUrl);
   const isComplete = item.kitchenStatus === 'COMPLETED';
+  const isGroupUpdating = item.itemIds.some((itemId) => updatingItemIds.has(itemId));
+  const pendingItemIds = item.rows
+    .filter((row) => row.kitchenStatus === 'PENDING')
+    .map((row) => row.id);
+  const acceptedItemIds = item.rows
+    .filter((row) => row.kitchenStatus === 'ACCEPTED')
+    .map((row) => row.id);
+  const canAcceptAll = pendingItemIds.length > 0 && !isGroupUpdating;
+  const canCompleteAll = pendingItemIds.length === 0 && acceptedItemIds.length > 0 && !isGroupUpdating;
 
   return (
     <Card className="overflow-hidden">
@@ -1371,7 +1486,7 @@ function KitchenItemCard({ item, now, onGroupStatus }) {
           onError={replaceBrokenImage}
         />
       </div>
-      <CardContent className="flex h-full flex-col gap-3 p-4">
+      <CardContent className="flex flex-col gap-3 p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xs font-medium text-muted-foreground">
@@ -1389,16 +1504,20 @@ function KitchenItemCard({ item, now, onGroupStatus }) {
         <div className="space-y-2 text-sm">
           {item.rows.map((row) => {
             const addonText = formatKitchenAddons(row.addons);
+            const rowUpdating = updatingItemIds.has(row.id);
             return (
               <div key={row.id} className="rounded-md border border-border bg-muted/20 p-3">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-medium">
-                  <span>{row.tableNumber}</span>
-                  <span className="text-muted-foreground">-</span>
-                  <span>
-                    {t('qty')}: {row.quantity}
-                  </span>
-                  <span className="text-muted-foreground">-</span>
-                  <span>{t('minutesAgo').replace('{minutes}', kitchenItemMinutes(row, now))}</span>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-medium">
+                    <span>{row.tableNumber}</span>
+                    <span className="text-muted-foreground">-</span>
+                    <span>
+                      {t('qty')}: {row.quantity}
+                    </span>
+                    <span className="text-muted-foreground">-</span>
+                    <span>{t('minutesAgo').replace('{minutes}', kitchenItemMinutes(row, now))}</span>
+                  </div>
+                  <KitchenStatusBadge status={row.kitchenStatus} />
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">
                   {t('addons')}: {addonText || '-'}
@@ -1408,6 +1527,25 @@ function KitchenItemCard({ item, now, onGroupStatus }) {
                     {t('note')}: {row.specialInstructions}
                   </div>
                 ) : null}
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-8 px-2 text-xs"
+                    disabled={['ACCEPTED', 'COMPLETED'].includes(row.kitchenStatus) || rowUpdating}
+                    onClick={() => onItemStatus(row.id, 'ACCEPTED')}
+                  >
+                    {t('accept')}
+                  </Button>
+                  <Button
+                    type="button"
+                    className="h-8 px-2 text-xs"
+                    disabled={row.kitchenStatus === 'COMPLETED' || rowUpdating}
+                    onClick={() => onItemStatus(row.id, 'COMPLETED')}
+                  >
+                    {t('complete')}
+                  </Button>
+                </div>
               </div>
             );
           })}
@@ -1417,17 +1555,33 @@ function KitchenItemCard({ item, now, onGroupStatus }) {
           <Button
             type="button"
             variant="outline"
-            disabled={['ACCEPTED', 'COMPLETED'].includes(item.kitchenStatus)}
-            onClick={() => onGroupStatus(item.itemIds, 'ACCEPTED')}
+            disabled={!canAcceptAll}
+            onClick={() =>
+              confirmKitchenGroupStatus({
+                itemName: item.itemName,
+                itemIds: pendingItemIds,
+                status: 'ACCEPTED',
+                onGroupStatus,
+                t,
+              })
+            }
           >
-            {t('accept')}
+            {t('acceptAll')}
           </Button>
           <Button
             type="button"
-            disabled={isComplete}
-            onClick={() => onGroupStatus(item.itemIds, 'COMPLETED')}
+            disabled={isComplete || !canCompleteAll}
+            onClick={() =>
+              confirmKitchenGroupStatus({
+                itemName: item.itemName,
+                itemIds: acceptedItemIds,
+                status: 'COMPLETED',
+                onGroupStatus,
+                t,
+              })
+            }
           >
-            {t('complete')}
+            {t('completeAll')}
           </Button>
         </div>
       </CardContent>
@@ -2424,6 +2578,57 @@ function waitingMs(order, now = Date.now()) {
   return Math.max(0, now - baseTime);
 }
 
+function confirmKitchenGroupStatus({ itemName, itemIds, status, onGroupStatus, t }) {
+  if (!itemIds.length) return;
+  const message = t(status === 'COMPLETED' ? 'confirmCompleteAll' : 'confirmAcceptAll')
+    .replace('{count}', itemIds.length)
+    .replace('{item}', itemName || '');
+  if (typeof window === 'undefined' || window.confirm(message)) {
+    onGroupStatus(itemIds, status);
+  }
+}
+
+function kitchenCategoryOptions(items = []) {
+  return [
+    ...new Set(
+      flattenKitchenItems(items)
+        .map((item) => item.categoryName)
+        .filter(Boolean)
+    ),
+  ].sort((a, b) => a.localeCompare(b));
+}
+
+function filterKitchenItems(items = [], filters = {}, now = Date.now()) {
+  return flattenKitchenItems(items).filter((item) => {
+    if (filters.dateFilter && !isSameLocalDate(kitchenItemBaseValue(item), filters.dateFilter)) {
+      return false;
+    }
+    if (filters.categoryFilter && item.categoryName !== filters.categoryFilter) {
+      return false;
+    }
+    if (filters.timeFilter && !matchesKitchenTimeFilter(item, filters.timeFilter, now)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function matchesKitchenTimeFilter(item, timeFilter, now = Date.now()) {
+  const minutes = kitchenItemMinutes(item, now);
+  switch (timeFilter) {
+    case 'under_5':
+      return minutes < 5;
+    case '5_10':
+      return minutes >= 5 && minutes < 10;
+    case '10_20':
+      return minutes >= 10 && minutes < 20;
+    case '20_plus':
+      return minutes >= 20;
+    default:
+      return true;
+  }
+}
+
 function flattenKitchenItems(items = []) {
   return items.flatMap((item) =>
     Array.isArray(item.items) && item.items.length
@@ -2469,7 +2674,7 @@ function groupKitchenCards(items = [], statusMap = {}) {
 }
 
 function itemStatusFromMap(item, statusMap = {}) {
-  return statusMap[item?.id] || 'PENDING';
+  return statusMap[item?.id] || item?.kitchenStatus || 'PENDING';
 }
 
 function groupedKitchenStatus(items = []) {
@@ -2480,23 +2685,6 @@ function groupedKitchenStatus(items = []) {
     return 'ACCEPTED';
   }
   return 'PENDING';
-}
-
-function affectedKitchenOrderIds(items = [], itemIds = []) {
-  const ids = new Set(itemIds);
-  return [
-    ...new Set(
-      flattenKitchenItems(items)
-        .filter((item) => ids.has(item.id))
-        .map((item) => item.orderId)
-        .filter(Boolean)
-    ),
-  ];
-}
-
-function isKitchenOrderComplete(items = [], statusMap = {}, orderId) {
-  const orderItems = flattenKitchenItems(items).filter((item) => item.orderId === orderId);
-  return orderItems.length > 0 && orderItems.every((item) => itemStatusFromMap(item, statusMap) === 'COMPLETED');
 }
 
 function applyKitchenStatusToOrder(order, statusMap = {}) {
@@ -2510,8 +2698,12 @@ function applyKitchenStatusToOrder(order, statusMap = {}) {
   };
 }
 
+function kitchenItemBaseValue(item) {
+  return item?.paidAt || item?.createdAt;
+}
+
 function kitchenItemMinutes(item, now = Date.now()) {
-  const baseValue = item?.paidAt || item?.createdAt;
+  const baseValue = kitchenItemBaseValue(item);
   const baseTime = new Date(baseValue).getTime();
   if (!baseValue || Number.isNaN(baseTime)) return 0;
   return Math.max(0, Math.floor((now - baseTime) / 60000));

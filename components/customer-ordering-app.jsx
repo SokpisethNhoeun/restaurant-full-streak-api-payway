@@ -44,9 +44,9 @@ const CUSTOMER_STORAGE_TTL_MS = 12 * 60 * 60 * 1000;
 const MIN_CART_TOTAL_USD = 0.01;
 const CUSTOMER_ALERT_AFTER_MS = 10 * 60 * 1000;
 const PAYMENT_APPS = [
-  { id: 'aba', name: 'ABA Bank', deepLink: 'aba://pay', Logo: AbaBankLogo },
-  { id: 'acleda', name: 'ACLEDA', deepLink: 'acleda://', Logo: AcledaBankLogo },
-  { id: 'chipmong', name: 'Chip Mong', deepLink: 'chipmong://', Logo: ChipMongBankLogo },
+  { id: 'aba', name: 'ABA Bank', Logo: AbaBankLogo },
+  { id: 'acleda', name: 'ACLEDA', Logo: AcledaBankLogo },
+  { id: 'chipmong', name: 'Chip Mong', Logo: ChipMongBankLogo },
 ];
 
 export default function CustomerOrderingApp({ tableNumber }) {
@@ -1217,7 +1217,6 @@ export default function CustomerOrderingApp({ tableNumber }) {
           secondsRemaining={secsRemaining(openModalPayment)}
           onClose={() => setOpenPaymentOrderId(null)}
           onRefresh={() => refreshPaymentFor(openPaymentOrderId)}
-          onCancel={() => cancelPaymentFor(openPaymentOrderId)}
         />
       ) : null}
     </main>
@@ -1721,7 +1720,7 @@ function CustomerOrderProgress({ status }) {
 }
 
 /* ── PaymentModal ─────────────────────────────────────────── */
-function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, onCancel }) {
+function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) {
   const { t } = useLanguage();
   const [showQr, setShowQr] = useState(false);
   const [selectedPaymentAppId, setSelectedPaymentAppId] = useState(PAYMENT_APPS[0].id);
@@ -1746,8 +1745,13 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
     };
   }, [payment.id]);
 
-  function openPaymentApp() {
-    const deepLink = buildPaymentAppDeepLink(selectedPaymentApp, payment);
+  async function openPaymentApp() {
+    if (!canOpenMobilePaymentApp()) {
+      setFallbackMessage(t('bankAppMobileOnly'));
+      setShowQr(true);
+      return;
+    }
+
     visibilityChangedRef.current = document.visibilityState === 'hidden';
     setOpeningPaymentApp(true);
     setFallbackMessage('');
@@ -1762,15 +1766,27 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
     if (fallbackTimerRef.current) {
       window.clearTimeout(fallbackTimerRef.current);
     }
-    window.location.href = deepLink;
-    fallbackTimerRef.current = window.setTimeout(() => {
+
+    try {
+      const response = await api(`/api/payments/${payment.id}/deeplink`, { method: 'POST' });
+      if (!isValidPaymentAppUrl(response?.url)) {
+        throw new Error('Invalid payment app link');
+      }
+      window.location.href = response.url;
+      fallbackTimerRef.current = window.setTimeout(() => {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+        setOpeningPaymentApp(false);
+        if (!visibilityChangedRef.current && document.visibilityState === 'visible') {
+          setFallbackMessage(t('bankAppNotOpened'));
+          setShowQr(true);
+        }
+      }, 1800);
+    } catch {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       setOpeningPaymentApp(false);
-      if (!visibilityChangedRef.current && document.visibilityState === 'visible') {
-        setFallbackMessage(t('bankAppNotOpened'));
-        setShowQr(true);
-      }
-    }, 1500);
+      setFallbackMessage(t('bankAppNotOpened'));
+      setShowQr(true);
+    }
   }
 
   return (
@@ -1900,10 +1916,12 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
                 type="button"
                 variant="outline"
                 className="h-10 rounded-xl text-sm sm:col-span-2"
-                onClick={onCancel}
+                onClick={() => {
+                  setFallbackMessage('');
+                  setShowQr(false);
+                }}
               >
-                <X className="h-4 w-4" />
-                {t('cancelPayment')}
+                {t('back')}
               </Button>
             </div>
           ) : !isExpired ? (
@@ -1911,10 +1929,10 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
               type="button"
               variant="outline"
               className="h-10 w-full rounded-xl text-sm"
-              onClick={onCancel}
+              onClick={onClose}
             >
               <X className="h-4 w-4" />
-              {t('cancelPayment')}
+              {t('close')}
             </Button>
           ) : (
             <div className="grid gap-2 sm:grid-cols-2">
@@ -1930,10 +1948,10 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
                 type="button"
                 variant="outline"
                 className="h-10 rounded-xl text-sm"
-                onClick={onCancel}
+                onClick={onClose}
               >
                 <X className="h-4 w-4" />
-                {t('cancelPayment')}
+                {t('close')}
               </Button>
             </div>
           )}
@@ -2402,10 +2420,17 @@ function paidWaitingMinutes(order, payment, now = Date.now()) {
   return Math.max(0, Math.floor((now - baseTime) / 60000));
 }
 
-function buildPaymentAppDeepLink(app, payment) {
-  const data = encodeURIComponent(payment?.khqrString || '');
-  const separator = app.deepLink.includes('?') ? '&' : '?';
-  return `${app.deepLink}${separator}data=${data}`;
+function canOpenMobilePaymentApp() {
+  if (typeof navigator === 'undefined') return false;
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+}
+
+function isValidPaymentAppUrl(url) {
+  try {
+    return new URL(url).protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 function promoDiscountForSubtotal(promo, subtotalUsd) {
