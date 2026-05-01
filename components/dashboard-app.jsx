@@ -1,74 +1,87 @@
-"use client";
+'use client';
 
-import { LanguageToggle, useLanguage } from "@/components/language-provider";
-import { ThemeToggle } from "@/components/theme-toggle";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import AnalyticsLineChart from "./analytics-line-chart";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input, Select, Textarea } from "@/components/ui/input";
-import { api, API_BASE, WS_URL } from "@/lib/api";
-import { goeyToastOptions } from "@/lib/goey-toast-options";
-import { displayUsd, khr, tags, usd } from "@/lib/utils";
-import { Client } from "@stomp/stompjs";
-import { gooeyToast } from "goey-toast";
+import { LanguageToggle, useLanguage } from '@/components/language-provider';
+import { ThemeToggle } from '@/components/theme-toggle';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input, Select, Textarea } from '@/components/ui/input';
+import { API_BASE, WS_URL, api } from '@/lib/api';
+import { goeyToastOptions } from '@/lib/goey-toast-options';
+import { displayUsd, khr, tags, usd } from '@/lib/utils';
+import { Client } from '@stomp/stompjs';
+import { gooeyToast } from 'goey-toast';
 import {
-  ArrowUpDown, BadgePercent, BarChart3, BellRing, CalendarDays, Check, Clock, CreditCard,
-  Download, Filter, LogIn, Pencil, Printer, RefreshCw, Search,
-  Table2, Upload, Utensils, Volume2, VolumeX, Wifi, WifiOff, X
-} from "lucide-react";
-import { QRCodeSVG } from "qrcode.react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import SockJS from "sockjs-client";
-
-const NEXT_STATUS = {
-  PAID: "RECEIVED",
-  RECEIVED: "PREPARING",
-  PREPARING: "READY",
-  READY: "COMPLETED"
-};
+  ArrowUpDown,
+  BadgePercent,
+  BarChart3,
+  BellRing,
+  CalendarDays,
+  Check,
+  ChefHat,
+  Clock,
+  CreditCard,
+  Download,
+  Filter,
+  LogIn,
+  Pencil,
+  Printer,
+  RefreshCw,
+  Search,
+  Table2,
+  Upload,
+  Utensils,
+  Volume2,
+  VolumeX,
+  Wifi,
+  WifiOff,
+  X,
+} from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import SockJS from 'sockjs-client';
+import AnalyticsLineChart from './analytics-line-chart';
 
 const SORT_OPTIONS = [
-  { value: "time_desc", labelKey: "sortNewest" },
-  { value: "time_asc",  labelKey: "sortOldest" },
-  { value: "payment",   labelKey: "sortPayment" },
-  { value: "status",    labelKey: "sortStatus" },
-  { value: "category",  labelKey: "sortCategory" },
-  { value: "item_name", labelKey: "sortItemName" },
-  { value: "table",     labelKey: "sortTable" },
-  { value: "order_no",  labelKey: "sortOrderNo" }
+  { value: 'time_desc', labelKey: 'sortNewest' },
+  { value: 'time_asc', labelKey: 'sortOldest' },
+  { value: 'payment', labelKey: 'sortPayment' },
+  { value: 'status', labelKey: 'sortStatus' },
+  { value: 'category', labelKey: 'sortCategory' },
+  { value: 'item_name', labelKey: 'sortItemName' },
+  { value: 'table', labelKey: 'sortTable' },
+  { value: 'order_no', labelKey: 'sortOrderNo' },
 ];
 
 const PAYMENT_FILTERS = [
-  { value: "",       labelKey: "allPayments" },
-  { value: "PAID",   labelKey: "paid" },
-  { value: "PENDING", labelKey: "pending" },
-  { value: "UNPAID", labelKey: "unpaidNoQr" },
-  { value: "EXPIRED", labelKey: "expired" }
+  { value: '', labelKey: 'allPayments' },
+  { value: 'PAID', labelKey: 'paid' },
+  { value: 'PENDING', labelKey: 'pending' },
+  { value: 'UNPAID', labelKey: 'unpaidNoQr' },
+  { value: 'EXPIRED', labelKey: 'expired' },
 ];
 
 const ORDER_STATUS_FILTERS = [
-  { value: "", labelKey: "allStatuses" },
-  { value: "PENDING_PAYMENT", labelKey: "awaitingPayment" },
-  { value: "PAID", labelKey: "paid" },
-  { value: "RECEIVED", labelKey: "receivedByStaff" },
-  { value: "PREPARING", labelKey: "preparing" },
-  { value: "READY", labelKey: "readyForPickup" },
-  { value: "COMPLETED", labelKey: "completed" },
-  { value: "CANCELLED", labelKey: "cancelled" },
-  { value: "REJECTED", labelKey: "rejected" },
-  { value: "EXPIRED", labelKey: "expired" }
+  { value: '', labelKey: 'allStatuses' },
+  { value: 'PENDING_PAYMENT', labelKey: 'awaitingPayment' },
+  { value: 'PAID', labelKey: 'paid' },
+  { value: 'RECEIVED', labelKey: 'receivedByStaff' },
+  { value: 'PREPARING', labelKey: 'preparing' },
+  { value: 'COMPLETED', labelKey: 'completed' },
+  { value: 'CANCELLED', labelKey: 'cancelled' },
+  { value: 'REJECTED', labelKey: 'rejected' },
+  { value: 'EXPIRED', labelKey: 'expired' },
 ];
 
-const DASHBOARD_SESSION_HINT = "happyboat-dashboard-session";
-const DASHBOARD_TOKEN_KEY = "happyboat-dashboard-token";
-const DASHBOARD_SOUND_READY_KEY = "happyboat-dashboard-sound-ready";
-const DASHBOARD_LANGUAGE_KEY = "happyboat-language";
+const DASHBOARD_SESSION_HINT = 'happyboat-dashboard-session';
+const DASHBOARD_TOKEN_KEY = 'happyboat-dashboard-token';
+const DASHBOARD_SOUND_READY_KEY = 'happyboat-dashboard-sound-ready';
+const DASHBOARD_LANGUAGE_KEY = 'happyboat-language';
 const ORDER_ATTENTION_MS = 10 * 60 * 1000;
-const DONUT_COLORS = ["#0f8a7f", "#f59e0b", "#2563eb", "#dc2626", "#7c3aed", "#059669"];
+const DONUT_COLORS = ['#0f8a7f', '#f59e0b', '#2563eb', '#dc2626', '#7c3aed', '#059669'];
 
 function readDashboardToken() {
-  if (typeof window === "undefined") return null;
+  if (typeof window === 'undefined') return null;
   return window.localStorage.getItem(DASHBOARD_TOKEN_KEY);
 }
 
@@ -79,26 +92,28 @@ function dashboardAuthHeaders(headers = {}) {
 }
 
 function clearDashboardSession() {
-  if (typeof window === "undefined") return;
+  if (typeof window === 'undefined') return;
   window.localStorage.removeItem(DASHBOARD_SESSION_HINT);
   window.localStorage.removeItem(DASHBOARD_TOKEN_KEY);
 }
 
 export default function DashboardApp() {
   const { t, language } = useLanguage();
-  const [credentials, setCredentials] = useState({ username: "admin", password: "admin123" });
+  const [credentials, setCredentials] = useState({ username: 'admin', password: 'admin123' });
   const [signedIn, setSignedIn] = useState(false);
-  const [tab, setTab] = useState("orders");
+  const [tab, setTab] = useState('orders');
   const [orders, setOrders] = useState([]);
+  const [kitchenItems, setKitchenItems] = useState([]);
+  const [kitchenItemStatus, setKitchenItemStatus] = useState({});
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [menu, setMenu] = useState({ categories: [], items: [], addons: [], options: [] });
   const [tables, setTables] = useState([]);
   const [payments, setPayments] = useState([]);
   const [promos, setPromos] = useState([]);
   const [analytics, setAnalytics] = useState(null);
-  const [analyticsError, setAnalyticsError] = useState("");
-  const [message, setMessage] = useState("");
-  const [liveState, setLiveState] = useState("offline");
+  const [analyticsError, setAnalyticsError] = useState('');
+  const [message, setMessage] = useState('');
+  const [liveState, setLiveState] = useState('offline');
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
   const [soundReady, setSoundReady] = useState(false);
   const [dashboardNow, setDashboardNow] = useState(Date.now());
@@ -123,18 +138,18 @@ export default function DashboardApp() {
   }, [payments]);
 
   useEffect(() => {
-    const hasSessionHint = window.localStorage.getItem(DASHBOARD_SESSION_HINT) === "1";
+    const hasSessionHint = window.localStorage.getItem(DASHBOARD_SESSION_HINT) === '1';
     if (!hasSessionHint && !readDashboardToken()) return;
-    setSoundReady(window.localStorage.getItem(DASHBOARD_SOUND_READY_KEY) === "1");
+    setSoundReady(window.localStorage.getItem(DASHBOARD_SOUND_READY_KEY) === '1');
 
     let mounted = true;
     fetch(`${API_BASE}/api/admin/auth/session`, {
-      credentials: "include",
-      cache: "no-store",
-      headers: dashboardAuthHeaders({ "ngrok-skip-browser-warning": "true" })
+      credentials: 'include',
+      cache: 'no-store',
+      headers: dashboardAuthHeaders({ 'ngrok-skip-browser-warning': 'true' }),
     })
       .then((response) => {
-        if (!response.ok) throw new Error("No dashboard session");
+        if (!response.ok) throw new Error('No dashboard session');
         if (mounted) setSignedIn(true);
       })
       .catch(() => {
@@ -147,19 +162,19 @@ export default function DashboardApp() {
 
   useEffect(() => {
     if (!signedIn) return;
-    setLiveState("connecting");
+    setLiveState('connecting');
     loadAll();
 
     const client = new Client({
       webSocketFactory: () => new SockJS(WS_URL),
       reconnectDelay: 5000,
       onConnect: () => {
-        setLiveState("connected");
-        client.subscribe("/topic/orders", (frame) => {
+        setLiveState('connected');
+        client.subscribe('/topic/orders', (frame) => {
           const order = JSON.parse(frame.body);
           applyLiveOrder(order);
         });
-        client.subscribe("/topic/payments", (frame) => {
+        client.subscribe('/topic/payments', (frame) => {
           try {
             applyLivePayment(JSON.parse(frame.body));
           } catch {
@@ -167,7 +182,7 @@ export default function DashboardApp() {
           }
           loadOrders();
         });
-        client.subscribe("/topic/order-alerts", (frame) => {
+        client.subscribe('/topic/order-alerts', (frame) => {
           try {
             applyCustomerAlert(JSON.parse(frame.body));
           } catch {
@@ -175,9 +190,9 @@ export default function DashboardApp() {
           }
         });
       },
-      onWebSocketClose: () => setLiveState("polling"),
-      onWebSocketError: () => setLiveState("polling"),
-      onStompError: () => setLiveState("polling")
+      onWebSocketClose: () => setLiveState('polling'),
+      onWebSocketError: () => setLiveState('polling'),
+      onStompError: () => setLiveState('polling'),
     });
 
     client.activate();
@@ -187,7 +202,7 @@ export default function DashboardApp() {
 
     return () => {
       window.clearInterval(pollTimer);
-      setLiveState("offline");
+      setLiveState('offline');
       client.deactivate();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -203,14 +218,14 @@ export default function DashboardApp() {
     try {
       return await api(path, {
         ...options,
-        credentials: "include",
-        headers: dashboardAuthHeaders({ ...(options.headers || {}) })
+        credentials: 'include',
+        headers: dashboardAuthHeaders({ ...(options.headers || {}) }),
       });
     } catch (error) {
       if (error.status === 401) {
         clearDashboardSession();
         setSignedIn(false);
-        setMessage(t("signInFailed"));
+        setMessage(t('signInFailed'));
       }
       throw error;
     }
@@ -218,64 +233,84 @@ export default function DashboardApp() {
 
   async function signIn(event) {
     event.preventDefault();
-    setMessage("");
+    setMessage('');
     unlockSound();
     try {
-      const session = await api("/api/admin/auth/login", {
-        method: "POST",
-        credentials: "include",
-        body: JSON.stringify(credentials)
+      const session = await api('/api/admin/auth/login', {
+        method: 'POST',
+        credentials: 'include',
+        body: JSON.stringify(credentials),
       });
       if (session?.token) {
         window.localStorage.setItem(DASHBOARD_TOKEN_KEY, session.token);
       }
-      gooeyToast.success(t("loginSuccess"), goeyToastOptions());
-      window.localStorage.setItem(DASHBOARD_SESSION_HINT, "1");
-      setCredentials((current) => ({ ...current, password: "" }));
+      gooeyToast.success(t('loginSuccess'), goeyToastOptions());
+      window.localStorage.setItem(DASHBOARD_SESSION_HINT, '1');
+      setCredentials((current) => ({ ...current, password: '' }));
       setSignedIn(true);
     } catch {
       clearDashboardSession();
-      setMessage(t("signInFailed"));
+      setMessage(t('signInFailed'));
     }
   }
 
   async function loadAll() {
-    const results = await Promise.allSettled([loadOrders(), loadMenu(), loadTables(), loadPayments(), loadPromos(), loadAnalytics()]);
-    const failed = results.find((result) => result.status === "rejected");
+    const results = await Promise.allSettled([
+      loadOrders(),
+      loadKitchen(),
+      loadMenu(),
+      loadTables(),
+      loadPayments(),
+      loadPromos(),
+      loadAnalytics(),
+    ]);
+    const failed = results.find((result) => result.status === 'rejected');
     if (failed) {
-      setMessage(failed.reason?.message || "Dashboard refresh failed");
+      setMessage(failed.reason?.message || 'Dashboard refresh failed');
     }
     setLastUpdatedAt(new Date());
   }
   async function loadOrders(options = {}) {
-    const data = await request("/api/admin/orders");
+    const data = await request('/api/admin/orders');
     mergeOrders(data, options);
+    setLastUpdatedAt(new Date());
+    return data;
+  }
+  async function loadKitchen() {
+    const data = await request('/api/admin/orders/kitchen');
+    setKitchenItems(data);
     setLastUpdatedAt(new Date());
     return data;
   }
   async function loadOrder(orderId) {
     const detail = await request(`/api/admin/orders/${orderId}`);
-    setSelectedOrder(detail);
+    setSelectedOrder(applyKitchenStatusToOrder(detail, kitchenItemStatus));
     return detail;
   }
-  async function loadMenu() { setMenu(await request("/api/admin/menu")); }
-  async function loadTables() { setTables(await request("/api/admin/tables")); }
+  async function loadMenu() {
+    setMenu(await request('/api/admin/menu'));
+  }
+  async function loadTables() {
+    setTables(await request('/api/admin/tables'));
+  }
   async function loadPayments(options = {}) {
-    const data = await request("/api/admin/payments");
+    const data = await request('/api/admin/payments');
     mergePayments(data, options);
     setLastUpdatedAt(new Date());
     return data;
   }
-  async function loadPromos() { setPromos(await request("/api/admin/promos")); }
+  async function loadPromos() {
+    setPromos(await request('/api/admin/promos'));
+  }
   async function loadAnalytics() {
-    setAnalyticsError("");
+    setAnalyticsError('');
     try {
-      const data = await request("/api/admin/analytics/summary");
+      const data = await request('/api/admin/analytics/summary');
       setAnalytics(data);
       return data;
     } catch (error) {
       setAnalytics(null);
-      setAnalyticsError(formatApiError(error, t("analyticsLoadFailed")));
+      setAnalyticsError(formatApiError(error, t('analyticsLoadFailed')));
       return null;
     }
   }
@@ -283,26 +318,29 @@ export default function DashboardApp() {
   async function pollLiveData() {
     const results = await Promise.allSettled([
       loadOrders({ notifyNew: true }),
+      loadKitchen(),
       loadPayments({ notifyNew: true }),
-      loadAnalytics()
+      loadAnalytics(),
     ]);
-    const failed = results.find((result) => result.status === "rejected");
+    const failed = results.find((result) => result.status === 'rejected');
     if (failed) {
-      setMessage(failed.reason?.message || "Live refresh failed");
+      setMessage(failed.reason?.message || 'Live refresh failed');
     }
   }
 
   function mergeOrders(nextOrders, options = {}) {
     const previousById = new Map(ordersRef.current.map((order) => [order.id, order]));
-    const alertOrder = Boolean(options.notifyNew) && nextOrders.find((order) => {
-      const previous = previousById.get(order.id);
-      return shouldNotifyOrder(order) && (!previous || previous.status !== order.status);
-    });
+    const alertOrder =
+      Boolean(options.notifyNew) &&
+      nextOrders.find((order) => {
+        const previous = previousById.get(order.id);
+        return shouldNotifyOrder(order) && (!previous || previous.status !== order.status);
+      });
     ordersRef.current = nextOrders;
     setOrders(nextOrders);
     if (alertOrder) {
       const didNotify = notifyOrderToast(alertOrder);
-      if (didNotify) playSound(isPaidKitchenOrder(alertOrder) ? "payment" : "order");
+      if (didNotify) playSound(isPaidKitchenOrder(alertOrder) ? 'payment' : 'order');
     }
   }
 
@@ -313,11 +351,12 @@ export default function DashboardApp() {
     setOrders(nextOrders);
     setLastUpdatedAt(new Date());
     if (selectedOrderRef.current?.id === order.id) {
-      setSelectedOrder((current) => current ? { ...current, ...order } : current);
+      setSelectedOrder((current) => (current ? { ...current, ...order } : current));
     }
+    loadKitchen().catch(() => {});
     if (shouldNotifyOrder(order) && (!previous || previous.status !== order.status)) {
       const didNotify = notifyOrderToast(order);
-      if (didNotify) playSound(isPaidKitchenOrder(order) ? "payment" : "order");
+      if (didNotify) playSound(isPaidKitchenOrder(order) ? 'payment' : 'order');
     }
   }
 
@@ -327,24 +366,26 @@ export default function DashboardApp() {
       ordersRef.current = nextOrders;
       setOrders(nextOrders);
       if (selectedOrderRef.current?.id === orderAlert.id) {
-        setSelectedOrder((current) => current ? { ...current, ...orderAlert } : current);
+        setSelectedOrder((current) => (current ? { ...current, ...orderAlert } : current));
       }
     }
     const didNotify = notifyCustomerAlertToast(orderAlert);
-    if (didNotify) playSound("rush");
+    if (didNotify) playSound('rush');
   }
 
   function mergePayments(nextPayments, options = {}) {
     const previousById = new Map(paymentsRef.current.map((payment) => [payment.id, payment]));
-    const alertPayment = Boolean(options.notifyNew) && nextPayments.find((payment) => {
-      const previous = previousById.get(payment.id);
-      return shouldNotifyPayment(payment) && (!previous || previous.status !== payment.status);
-    });
+    const alertPayment =
+      Boolean(options.notifyNew) &&
+      nextPayments.find((payment) => {
+        const previous = previousById.get(payment.id);
+        return shouldNotifyPayment(payment) && (!previous || previous.status !== payment.status);
+      });
     paymentsRef.current = nextPayments;
     setPayments(nextPayments);
     if (alertPayment) {
       const didNotify = notifyPaymentToast(alertPayment);
-      if (didNotify) playSound("payment");
+      if (didNotify) playSound('payment');
     }
   }
 
@@ -356,27 +397,75 @@ export default function DashboardApp() {
     setLastUpdatedAt(new Date());
     if (shouldNotifyPayment(payment) && (!previous || previous.status !== payment.status)) {
       const didNotify = notifyPaymentToast(payment);
-      if (didNotify) playSound("payment");
+      if (didNotify) playSound('payment');
+    }
+    if (payment.status === 'PAID') {
+      loadKitchen().catch(() => {});
     }
   }
 
   async function updateOrderStatus(orderId, status) {
     const data = await request(`/api/admin/orders/${orderId}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({ status })
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
     });
     const nextOrders = upsertById(ordersRef.current, data);
     ordersRef.current = nextOrders;
     setOrders(nextOrders);
     setSelectedOrder(data);
+    loadKitchen().catch(() => {});
+  }
+
+  function updateOrderItemKitchenStatus(orderItemId, status) {
+    updateLocalKitchenStatus([orderItemId], status);
+  }
+
+  function updateKitchenGroupStatus(itemIds, status) {
+    updateLocalKitchenStatus(itemIds, status);
+  }
+
+  function updateLocalKitchenStatus(itemIds, status) {
+    const ids = Array.isArray(itemIds) ? itemIds : [itemIds];
+    const affectedOrderIds = affectedKitchenOrderIds(kitchenItems, ids);
+    const nextStatus = ids.reduce(
+      (next, itemId) => ({
+        ...next,
+        [itemId]: status,
+      }),
+      kitchenItemStatus
+    );
+    setKitchenItemStatus(nextStatus);
+
+    const orderIdsToComplete = affectedOrderIds.filter((orderId) =>
+      isKitchenOrderComplete(kitchenItems, nextStatus, orderId)
+    );
+    orderIdsToComplete.forEach((orderId) => {
+      updateOrderStatus(orderId, 'COMPLETED').catch(() => {});
+    });
+
+    if (selectedOrderRef.current?.items) {
+      setSelectedOrder((current) =>
+        current
+          ? {
+              ...current,
+              items: current.items.map((item) =>
+                nextStatus[item.id] ? { ...item, kitchenStatus: nextStatus[item.id] } : item
+              ),
+            }
+          : current
+      );
+    }
   }
 
   function unlockSound() {
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       audioRef.current = audioRef.current || new AudioContext();
-      if (audioRef.current.state === "suspended") {
-        audioRef.current.resume().then(() => markSoundReady(true)).catch(() => markSoundReady(false));
+      if (audioRef.current.state === 'suspended') {
+        audioRef.current
+          .resume()
+          .then(() => markSoundReady(true))
+          .catch(() => markSoundReady(false));
       } else {
         markSoundReady(true);
       }
@@ -385,23 +474,27 @@ export default function DashboardApp() {
     }
   }
 
-  function playSound(alertType = "order") {
+  function playSound(alertType = 'order') {
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       const ctx = audioRef.current || new AudioContext();
       audioRef.current = ctx;
       const beep = () => {
         const now = ctx.currentTime;
-        const rings = alertType === "rush"
-          ? [0, 0.14, 0.28, 0.62, 0.76, 0.9, 1.24, 1.38]
-          : [0, 0.18, 0.36, 0.78, 0.96, 1.14];
+        const rings =
+          alertType === 'rush'
+            ? [0, 0.14, 0.28, 0.62, 0.76, 0.9, 1.24, 1.38]
+            : [0, 0.18, 0.36, 0.78, 0.96, 1.14];
         rings.forEach((offset, index) => {
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
-          osc.type = alertType === "rush" ? "square" : "sine";
+          osc.type = alertType === 'rush' ? 'square' : 'sine';
           osc.frequency.setValueAtTime(index % 2 === 0 ? 1174 : 880, now + offset);
           gain.gain.setValueAtTime(0.0001, now + offset);
-          gain.gain.exponentialRampToValueAtTime(alertType === "rush" ? 0.2 : 0.16, now + offset + 0.018);
+          gain.gain.exponentialRampToValueAtTime(
+            alertType === 'rush' ? 0.2 : 0.16,
+            now + offset + 0.018
+          );
           gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.14);
           osc.connect(gain);
           gain.connect(ctx.destination);
@@ -413,11 +506,14 @@ export default function DashboardApp() {
         }
         speakDashboardAlert(alertType);
       };
-      if (ctx.state === "suspended") {
-        ctx.resume().then(() => {
-          markSoundReady(true);
-          beep();
-        }).catch(() => markSoundReady(false));
+      if (ctx.state === 'suspended') {
+        ctx
+          .resume()
+          .then(() => {
+            markSoundReady(true);
+            beep();
+          })
+          .catch(() => markSoundReady(false));
         return;
       }
       markSoundReady(true);
@@ -429,14 +525,14 @@ export default function DashboardApp() {
 
   function testSound() {
     unlockSound();
-    playSound("order");
+    playSound('order');
   }
 
   function markSoundReady(ready) {
     setSoundReady(ready);
     try {
       if (ready) {
-        window.localStorage.setItem(DASHBOARD_SOUND_READY_KEY, "1");
+        window.localStorage.setItem(DASHBOARD_SOUND_READY_KEY, '1');
       } else {
         window.localStorage.removeItem(DASHBOARD_SOUND_READY_KEY);
       }
@@ -445,21 +541,21 @@ export default function DashboardApp() {
     }
   }
 
-  function speakDashboardAlert(alertType = "order") {
+  function speakDashboardAlert(alertType = 'order') {
     try {
-      if (!("speechSynthesis" in window)) return;
-      let lang = window.localStorage.getItem(DASHBOARD_LANGUAGE_KEY) || "en";
-      let text = "";
-      if (alertType === "rush") {
-        text = lang === "km" ? t("customerWaitingVoice") : t("customerWaitingVoice");
-      } else if (alertType === "payment") {
-        text = lang === "km" ? "បានទទួលការបង់ប្រាក់" : "Received payment";
+      if (!('speechSynthesis' in window)) return;
+      let lang = window.localStorage.getItem(DASHBOARD_LANGUAGE_KEY) || 'en';
+      let text = '';
+      if (alertType === 'rush') {
+        text = lang === 'km' ? t('customerWaitingVoice') : t('customerWaitingVoice');
+      } else if (alertType === 'payment') {
+        text = lang === 'km' ? 'បានទទួលការបង់ប្រាក់' : 'Received payment';
       } else {
-        text = lang === "km" ? "បានទទួលការកម្មង់" : "Received new order";
+        text = lang === 'km' ? 'បានទទួលការកម្មង់' : 'Received new order';
       }
       const utterance = new window.SpeechSynthesisUtterance(text);
-      utterance.lang = lang === "km" ? "km-KH" : "en-US";
-      utterance.rate = lang === "km" ? 0.9 : 0.95;
+      utterance.lang = lang === 'km' ? 'km-KH' : 'en-US';
+      utterance.rate = lang === 'km' ? 0.9 : 0.95;
       utterance.volume = 1;
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(utterance);
@@ -469,11 +565,11 @@ export default function DashboardApp() {
   }
 
   function shouldNotifyOrder(order) {
-    return order.status === "PENDING_PAYMENT" || isPaidKitchenOrder(order);
+    return order.status === 'PENDING_PAYMENT' || isPaidKitchenOrder(order);
   }
 
   function shouldNotifyPayment(payment) {
-    return payment.status === "PAID";
+    return payment.status === 'PAID';
   }
 
   function notifyOrderToast(order) {
@@ -483,33 +579,43 @@ export default function DashboardApp() {
     if (notifiedOrderToastRef.current.size > 100) {
       notifiedOrderToastRef.current = new Set([...notifiedOrderToastRef.current].slice(-50));
     }
-    const title = isPaidKitchenOrder(order) ? t("paidOrderReady") : t("newOrderUpdate");
-    gooeyToast.info(title, goeyToastOptions({
-      id: "dashboard-order-alert",
-      description: `${order.orderNumber || t("order")} · ${order.tableNumber || ""}`,
-      action: order.id ? {
-        label: t("showDetail"),
-        onClick: () => loadOrder(order.id)
-      } : undefined
-    }));
+    const title = isPaidKitchenOrder(order) ? t('paidOrderReady') : t('newOrderUpdate');
+    gooeyToast.info(
+      title,
+      goeyToastOptions({
+        id: 'dashboard-order-alert',
+        description: `${order.orderNumber || t('order')} · ${order.tableNumber || ''}`,
+        action: order.id
+          ? {
+              label: t('showDetail'),
+              onClick: () => loadOrder(order.id),
+            }
+          : undefined,
+      })
+    );
     return true;
   }
 
   function notifyCustomerAlertToast(orderAlert) {
-    const toastKey = `${orderAlert?.id || orderAlert?.orderNumber || "order"}:rush`;
+    const toastKey = `${orderAlert?.id || orderAlert?.orderNumber || 'order'}:rush`;
     if (notifiedCustomerAlertRef.current.has(toastKey)) return false;
     notifiedCustomerAlertRef.current.add(toastKey);
     if (notifiedCustomerAlertRef.current.size > 100) {
       notifiedCustomerAlertRef.current = new Set([...notifiedCustomerAlertRef.current].slice(-50));
     }
-    gooeyToast.info(t("orderNeedsAttention"), goeyToastOptions({
-      id: "dashboard-customer-alert",
-      description: `${orderAlert?.orderNumber || t("order")} · ${orderAlert?.tableNumber || ""} · ${orderAlert?.waitingMinutes || 10}m+`,
-      action: orderAlert?.id ? {
-        label: t("showDetail"),
-        onClick: () => loadOrder(orderAlert.id)
-      } : undefined
-    }));
+    gooeyToast.info(
+      t('orderNeedsAttention'),
+      goeyToastOptions({
+        id: 'dashboard-customer-alert',
+        description: `${orderAlert?.orderNumber || t('order')} · ${orderAlert?.tableNumber || ''} · ${orderAlert?.waitingMinutes || 10}m+`,
+        action: orderAlert?.id
+          ? {
+              label: t('showDetail'),
+              onClick: () => loadOrder(orderAlert.id),
+            }
+          : undefined,
+      })
+    );
     return true;
   }
 
@@ -520,10 +626,13 @@ export default function DashboardApp() {
     if (notifiedPaymentToastRef.current.size > 100) {
       notifiedPaymentToastRef.current = new Set([...notifiedPaymentToastRef.current].slice(-50));
     }
-    gooeyToast.success(t("paymentReceivedAlert"), goeyToastOptions({
-      id: "dashboard-payment-alert",
-      description: `${payment.paymentNumber || t("payments")} · ${payment.tableNumber || ""}`
-    }));
+    gooeyToast.success(
+      t('paymentReceivedAlert'),
+      goeyToastOptions({
+        id: 'dashboard-payment-alert',
+        description: `${payment.paymentNumber || t('payments')} · ${payment.tableNumber || ''}`,
+      })
+    );
     return true;
   }
 
@@ -539,17 +648,30 @@ export default function DashboardApp() {
             <div className="flex items-center gap-3">
               <img src="/logo.png" alt="HappyBoat" className="h-12 w-12 rounded-md object-cover" />
               <div>
-                <h1 className="text-xl font-semibold">{t("dashboardTitle")}</h1>
-                <p className="text-sm text-muted-foreground">{t("dashboardSubtitle")}</p>
+                <h1 className="text-xl font-semibold">{t('dashboardTitle')}</h1>
+                <p className="text-sm text-muted-foreground">{t('dashboardSubtitle')}</p>
               </div>
             </div>
-            {message ? <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{message}</div> : null}
+            {message ? (
+              <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {message}
+              </div>
+            ) : null}
             <form className="space-y-3" onSubmit={signIn}>
-              <Input value={credentials.username} onChange={(e) => setCredentials({ ...credentials, username: e.target.value })} placeholder={t("username")} />
-              <Input value={credentials.password} onChange={(e) => setCredentials({ ...credentials, password: e.target.value })} type="password" placeholder={t("password")} />
+              <Input
+                value={credentials.username}
+                onChange={(e) => setCredentials({ ...credentials, username: e.target.value })}
+                placeholder={t('username')}
+              />
+              <Input
+                value={credentials.password}
+                onChange={(e) => setCredentials({ ...credentials, password: e.target.value })}
+                type="password"
+                placeholder={t('password')}
+              />
               <Button className="w-full">
                 <LogIn className="h-4 w-4" />
-                {t("signIn")}
+                {t('signIn')}
               </Button>
             </form>
           </CardContent>
@@ -566,22 +688,35 @@ export default function DashboardApp() {
             <img src="/logo.png" alt="HappyBoat" className="h-10 w-10 rounded-md object-cover" />
             <div>
               <h1 className="text-lg font-semibold">HappyBoat</h1>
-              <p className="text-xs text-muted-foreground">{t("liveRestaurantOps")}</p>
+              <p className="text-xs text-muted-foreground">{t('liveRestaurantOps')}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <div className="hidden items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground sm:flex">
-              {liveState === "connected" ? <Wifi className="h-3.5 w-3.5 text-primary" /> : <WifiOff className="h-3.5 w-3.5 text-secondary-foreground" />}
-              <span>{liveState === "connected" ? t("live") : t("polling")}</span>
-              {lastUpdatedAt ? <span>{t("updated")} {formatClockTime(lastUpdatedAt)}</span> : null}
+              {liveState === 'connected' ? (
+                <Wifi className="h-3.5 w-3.5 text-primary" />
+              ) : (
+                <WifiOff className="h-3.5 w-3.5 text-secondary-foreground" />
+              )}
+              <span>{liveState === 'connected' ? t('live') : t('polling')}</span>
+              {lastUpdatedAt ? (
+                <span>
+                  {t('updated')} {formatClockTime(lastUpdatedAt)}
+                </span>
+              ) : null}
             </div>
             <LanguageToggle />
-            <Button variant="outline" className="px-3" onClick={testSound} aria-label={t("testOrderSound")}>
+            <Button
+              variant="outline"
+              className="px-3"
+              onClick={testSound}
+              aria-label={t('testOrderSound')}
+            >
               {soundReady ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-              <span className="hidden sm:inline">{t("alert")}</span>
+              <span className="hidden sm:inline">{t('alert')}</span>
             </Button>
             <ThemeToggle />
-            <Button variant="outline" size="icon" onClick={loadAll} aria-label={t("refresh")}>
+            <Button variant="outline" size="icon" onClick={loadAll} aria-label={t('refresh')}>
               <RefreshCw className="h-4 w-4" />
             </Button>
           </div>
@@ -590,43 +725,93 @@ export default function DashboardApp() {
 
       <div className="mx-auto max-w-7xl px-4 py-6">
         <div className="mb-6 flex flex-wrap gap-2">
-          <TabButton active={tab === "orders"}    onClick={() => setTab("orders")}    icon={Clock}     label={t("orders")} />
-          <TabButton active={tab === "menu"}      onClick={() => setTab("menu")}      icon={Utensils}  label={t("menu")} />
-          <TabButton active={tab === "tables"}    onClick={() => setTab("tables")}    icon={Table2}    label={t("tables")} />
-          <TabButton active={tab === "payments"}  onClick={() => setTab("payments")}  icon={CreditCard} label={t("payments")} />
-          <TabButton active={tab === "promos"}    onClick={() => setTab("promos")}    icon={BadgePercent} label={t("promos")} />
-          <TabButton active={tab === "analytics"} onClick={() => setTab("analytics")} icon={BarChart3} label={t("analytics")} />
+          <TabButton
+            active={tab === 'orders'}
+            onClick={() => setTab('orders')}
+            icon={Clock}
+            label={t('orders')}
+          />
+          <TabButton
+            active={tab === 'kitchen'}
+            onClick={() => setTab('kitchen')}
+            icon={ChefHat}
+            label={t('kitchen')}
+          />
+          <TabButton
+            active={tab === 'menu'}
+            onClick={() => setTab('menu')}
+            icon={Utensils}
+            label={t('menu')}
+          />
+          <TabButton
+            active={tab === 'tables'}
+            onClick={() => setTab('tables')}
+            icon={Table2}
+            label={t('tables')}
+          />
+          <TabButton
+            active={tab === 'payments'}
+            onClick={() => setTab('payments')}
+            icon={CreditCard}
+            label={t('payments')}
+          />
+          <TabButton
+            active={tab === 'promos'}
+            onClick={() => setTab('promos')}
+            icon={BadgePercent}
+            label={t('promos')}
+          />
+          <TabButton
+            active={tab === 'analytics'}
+            onClick={() => setTab('analytics')}
+            icon={BarChart3}
+            label={t('analytics')}
+          />
         </div>
 
-        {tab === "orders" ? (
+        {tab === 'orders' ? (
           <OrdersView
             orders={orders}
             selectedOrder={selectedOrder}
             onSelect={loadOrder}
             onClear={() => setSelectedOrder(null)}
             onStatus={updateOrderStatus}
+            onItemStatus={updateOrderItemKitchenStatus}
+            kitchenItemStatus={kitchenItemStatus}
             now={dashboardNow}
           />
         ) : null}
 
-        {tab === "menu" ? (
-          <MenuView menu={menu} request={request} reload={loadMenu} />
+        {tab === 'kitchen' ? (
+          <KitchenView
+            items={kitchenItems}
+            statusMap={kitchenItemStatus}
+            onGroupStatus={updateKitchenGroupStatus}
+            now={dashboardNow}
+          />
         ) : null}
 
-        {tab === "tables" ? (
+        {tab === 'menu' ? <MenuView menu={menu} request={request} reload={loadMenu} /> : null}
+
+        {tab === 'tables' ? (
           <TablesView tables={tables} request={request} reload={loadTables} />
         ) : null}
 
-        {tab === "payments" ? (
+        {tab === 'payments' ? (
           <PaymentsView payments={payments} request={request} reload={loadPayments} />
         ) : null}
 
-        {tab === "promos" ? (
+        {tab === 'promos' ? (
           <PromoCodesView promos={promos} request={request} reload={loadPromos} />
         ) : null}
 
-        {tab === "analytics" ? (
-          <AnalyticsView analytics={analytics} error={analyticsError} lastUpdatedAt={lastUpdatedAt} onRefresh={loadAnalytics} />
+        {tab === 'analytics' ? (
+          <AnalyticsView
+            analytics={analytics}
+            error={analyticsError}
+            lastUpdatedAt={lastUpdatedAt}
+            onRefresh={loadAnalytics}
+          />
         ) : null}
       </div>
     </main>
@@ -635,13 +820,22 @@ export default function DashboardApp() {
 
 // Orders
 
-function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now }) {
+function OrdersView({
+  orders,
+  selectedOrder,
+  onSelect,
+  onClear,
+  onStatus,
+  onItemStatus,
+  kitchenItemStatus,
+  now,
+}) {
   const { t } = useLanguage();
-  const [sortKey, setSortKey]         = useState("time_desc");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [paymentFilter, setPaymentFilter] = useState("");
-  const [dateFilter, setDateFilter] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [sortKey, setSortKey] = useState('time_desc');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [paymentFilter, setPaymentFilter] = useState('');
+  const [dateFilter, setDateFilter] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
 
   const displayedOrders = useMemo(() => {
     let result = [...orders];
@@ -660,7 +854,7 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
 
     // Payment status filter
     if (paymentFilter) {
-      if (paymentFilter === "UNPAID") {
+      if (paymentFilter === 'UNPAID') {
         result = result.filter((o) => !o.paymentStatus);
       } else {
         result = result.filter((o) => o.paymentStatus === paymentFilter);
@@ -678,22 +872,22 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
     // Sort
     result.sort((a, b) => {
       switch (sortKey) {
-        case "time_asc":
+        case 'time_asc':
           return new Date(a.createdAt) - new Date(b.createdAt);
-        case "time_desc":
+        case 'time_desc':
           return new Date(b.createdAt) - new Date(a.createdAt);
-        case "payment":
-          return (a.paymentStatus || "UNPAID").localeCompare(b.paymentStatus || "UNPAID");
-        case "status":
-          return (a.status || "").localeCompare(b.status || "");
-        case "category":
-          return (a.firstCategoryName || "").localeCompare(b.firstCategoryName || "");
-        case "item_name":
-          return (a.firstItemName || "").localeCompare(b.firstItemName || "");
-        case "table":
-          return (a.tableNumber || "").localeCompare(b.tableNumber || "");
-        case "order_no":
-          return (a.orderNumber || "").localeCompare(b.orderNumber || "");
+        case 'payment':
+          return (a.paymentStatus || 'UNPAID').localeCompare(b.paymentStatus || 'UNPAID');
+        case 'status':
+          return (a.status || '').localeCompare(b.status || '');
+        case 'category':
+          return (a.firstCategoryName || '').localeCompare(b.firstCategoryName || '');
+        case 'item_name':
+          return (a.firstItemName || '').localeCompare(b.firstItemName || '');
+        case 'table':
+          return (a.tableNumber || '').localeCompare(b.tableNumber || '');
+        case 'order_no':
+          return (a.orderNumber || '').localeCompare(b.orderNumber || '');
         default:
           return 0;
       }
@@ -711,7 +905,7 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
       <Card>
         <CardHeader className="flex-row items-center justify-between gap-2 flex-wrap">
           <CardTitle className="flex items-center gap-2">
-            {t("liveOrders")}
+            {t('liveOrders')}
             <Badge tone="primary">{displayedOrders.length}</Badge>
           </CardTitle>
         </CardHeader>
@@ -723,7 +917,7 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9"
-              placeholder={t("searchOrderTable")}
+              placeholder={t('searchOrderTable')}
             />
           </div>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -735,7 +929,9 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
                 className="pl-9 text-sm"
               >
                 {SORT_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>
+                  <option key={opt.value} value={opt.value}>
+                    {t(opt.labelKey)}
+                  </option>
                 ))}
               </Select>
             </div>
@@ -747,7 +943,9 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
                 className="pl-9 text-sm"
               >
                 {ORDER_STATUS_FILTERS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>
+                  <option key={opt.value} value={opt.value}>
+                    {t(opt.labelKey)}
+                  </option>
                 ))}
               </Select>
             </div>
@@ -759,7 +957,9 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
                 className="pl-9 text-sm"
               >
                 {PAYMENT_FILTERS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>
+                  <option key={opt.value} value={opt.value}>
+                    {t(opt.labelKey)}
+                  </option>
                 ))}
               </Select>
             </div>
@@ -779,15 +979,15 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
               onClick={() => setDateFilter(dateInputValue(new Date()))}
               className="rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-muted"
             >
-              {t("today")}
+              {t('today')}
             </button>
             {dateFilter ? (
               <button
                 type="button"
-                onClick={() => setDateFilter("")}
+                onClick={() => setDateFilter('')}
                 className="rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-muted"
               >
-                {t("allDates")}
+                {t('allDates')}
               </button>
             ) : null}
           </div>
@@ -798,18 +998,25 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-secondary/40 bg-secondary/10 px-3 py-2 text-sm">
               <span className="flex min-w-0 items-center gap-2 font-medium">
                 <BellRing className="h-4 w-4 shrink-0 text-secondary-foreground" />
-                {t("orderNeedsAttention")} · {attentionOrders.length}
+                {t('orderNeedsAttention')} · {attentionOrders.length}
               </span>
-              <Button type="button" variant="outline" className="h-9 px-3 text-xs" onClick={() => onSelect(attentionOrders[0].id)}>
-                {t("showDetail")}
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9 px-3 text-xs"
+                onClick={() => onSelect(attentionOrders[0].id)}
+              >
+                {t('showDetail')}
               </Button>
             </div>
           ) : null}
           {displayedOrders.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{t("noOrdersFilter")}</p>
+            <p className="text-sm text-muted-foreground">{t('noOrdersFilter')}</p>
           ) : (
             displayedOrders.map((order) => {
-              const firstItemImg = displayImageUrl(order.firstItemImageUrl || order.items?.[0]?.imageUrl);
+              const firstItemImg = displayImageUrl(
+                order.firstItemImageUrl || order.items?.[0]?.imageUrl
+              );
               const firstItemName = order.firstItemName || order.items?.[0]?.itemName;
               const firstCategoryName = order.firstCategoryName;
               const needsAttention = needsKitchenAttention(order, now);
@@ -817,7 +1024,7 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
                 <button
                   key={order.id}
                   onClick={() => onSelect(order.id)}
-                  className={`w-full rounded-md border bg-card p-3 text-left transition hover:border-primary ${needsAttention ? "border-secondary shadow-sm shadow-secondary/10" : "border-border"}`}
+                  className={`w-full rounded-md border bg-card p-3 text-left transition hover:border-primary ${needsAttention ? 'border-secondary shadow-sm shadow-secondary/10' : 'border-border'}`}
                 >
                   <div className="flex items-start gap-3">
                     {firstItemImg ? (
@@ -835,9 +1042,9 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
                         <div>
                           <div className="font-semibold">{order.orderNumber}</div>
                           <div className="text-sm text-muted-foreground">{order.tableNumber}</div>
-	                          <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
-	                            <Clock className="h-3 w-3" />
-	                            {formatOrderDateTime(order.createdAt)}
+                          <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                            <Clock className="h-3 w-3" />
+                            {formatOrderDateTime(order.createdAt)}
                           </div>
                           <div className="mt-1">
                             <OrderMinutesBadge minutes={totalOrderMinutes(order, now)} />
@@ -849,20 +1056,27 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
                           ) : null}
                           {firstItemName ? (
                             <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                              {firstCategoryName ? `${firstCategoryName} - ` : ""}{firstItemName}
+                              {firstCategoryName ? `${firstCategoryName} - ` : ''}
+                              {firstItemName}
                             </div>
                           ) : null}
                           {order.promoCode ? (
-                            <div className="mt-1 text-xs text-primary">{t("promoCode")}: {order.promoCode}</div>
+                            <div className="mt-1 text-xs text-primary">
+                              {t('promoCode')}: {order.promoCode}
+                            </div>
                           ) : null}
                         </div>
                         <div className="flex flex-col items-end gap-1">
                           <StatusBadge status={order.status} />
-                          {needsAttention ? <AttentionBadge minutes={waitingMinutes(order, now)} /> : null}
+                          {needsAttention ? (
+                            <AttentionBadge minutes={waitingMinutes(order, now)} />
+                          ) : null}
                         </div>
                       </div>
                       <div className="mt-1 flex items-center justify-between text-sm">
-                        <span>{displayUsd(order.totalUsd)} / {khr(order.totalKhr)}</span>
+                        <span>
+                          {displayUsd(order.totalUsd)} / {khr(order.totalKhr)}
+                        </span>
                         <PaymentBadge status={order.paymentStatus} />
                       </div>
                     </div>
@@ -876,10 +1090,16 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
 
       <Card className="hidden lg:block lg:sticky lg:top-24 lg:self-start">
         <CardHeader>
-          <CardTitle>{t("orderDetail")}</CardTitle>
+          <CardTitle>{t('orderDetail')}</CardTitle>
         </CardHeader>
         <CardContent className="max-h-[calc(100vh-9rem)] overflow-auto">
-          <OrderDetailContent selectedOrder={selectedOrder} onStatus={onStatus} now={now} />
+          <OrderDetailContent
+            selectedOrder={selectedOrder}
+            onStatus={onStatus}
+            onItemStatus={onItemStatus}
+            kitchenItemStatus={kitchenItemStatus}
+            now={now}
+          />
         </CardContent>
       </Card>
 
@@ -887,6 +1107,8 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
         <MobileOrderSheet
           selectedOrder={selectedOrder}
           onStatus={onStatus}
+          onItemStatus={onItemStatus}
+          kitchenItemStatus={kitchenItemStatus}
           onClose={onClear}
           now={now}
         />
@@ -895,10 +1117,20 @@ function OrdersView({ orders, selectedOrder, onSelect, onClear, onStatus, now })
   );
 }
 
-function MobileOrderSheet({ selectedOrder, onStatus, onClose, now }) {
+function MobileOrderSheet({
+  selectedOrder,
+  onStatus,
+  onItemStatus,
+  kitchenItemStatus = {},
+  onClose,
+  now,
+}) {
   const { t } = useLanguage();
   return (
-    <div className="fixed inset-0 z-40 flex items-end bg-black/40 backdrop-blur-sm lg:hidden" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-40 flex items-end bg-black/40 backdrop-blur-sm lg:hidden"
+      onClick={onClose}
+    >
       <div
         className="bottom-sheet-animate max-h-[92vh] w-full overflow-auto rounded-t-2xl bg-card text-card-foreground shadow-xl"
         onClick={(event) => event.stopPropagation()}
@@ -906,24 +1138,42 @@ function MobileOrderSheet({ selectedOrder, onStatus, onClose, now }) {
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-border bg-card/95 p-4 backdrop-blur">
           <div>
             <h2 className="text-base font-semibold">{selectedOrder.orderNumber}</h2>
-            <p className="text-xs text-muted-foreground">{selectedOrder.tableNumber} · {formatOrderDateTime(selectedOrder.createdAt)}</p>
+            <p className="text-xs text-muted-foreground">
+              {selectedOrder.tableNumber} · {formatOrderDateTime(selectedOrder.createdAt)}
+            </p>
           </div>
-          <button onClick={onClose} className="rounded-md border border-border p-1.5 text-muted-foreground hover:text-foreground" aria-label={t("close")}>
+          <button
+            onClick={onClose}
+            className="rounded-md border border-border p-1.5 text-muted-foreground hover:text-foreground"
+            aria-label={t('close')}
+          >
             <X className="h-4 w-4" />
           </button>
         </div>
         <div className="p-4">
-          <OrderDetailContent selectedOrder={selectedOrder} onStatus={onStatus} now={now} />
+          <OrderDetailContent
+            selectedOrder={selectedOrder}
+            onStatus={onStatus}
+            onItemStatus={onItemStatus}
+            kitchenItemStatus={kitchenItemStatus}
+            now={now}
+          />
         </div>
       </div>
     </div>
   );
 }
 
-function OrderDetailContent({ selectedOrder, onStatus, now }) {
+function OrderDetailContent({
+  selectedOrder,
+  onStatus,
+  onItemStatus,
+  kitchenItemStatus = {},
+  now,
+}) {
   const { t } = useLanguage();
   if (!selectedOrder) {
-    return <p className="text-sm text-muted-foreground">{t("selectOrderDetail")}</p>;
+    return <p className="text-sm text-muted-foreground">{t('selectOrderDetail')}</p>;
   }
   const needsAttention = needsKitchenAttention(selectedOrder, now);
 
@@ -933,10 +1183,10 @@ function OrderDetailContent({ selectedOrder, onStatus, now }) {
         <div>
           <h2 className="font-semibold">{selectedOrder.orderNumber}</h2>
           <p className="text-sm text-muted-foreground">{selectedOrder.tableNumber}</p>
-	          <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-	            <Clock className="h-3 w-3" />
-	            {formatOrderDateTime(selectedOrder.createdAt)}
-	          </p>
+          <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+            <Clock className="h-3 w-3" />
+            {formatOrderDateTime(selectedOrder.createdAt)}
+          </p>
           <div className="mt-2">
             <OrderMinutesBadge minutes={totalOrderMinutes(selectedOrder, now)} />
           </div>
@@ -952,13 +1202,18 @@ function OrderDetailContent({ selectedOrder, onStatus, now }) {
       {needsAttention ? (
         <div className="flex items-start gap-2 rounded-md border border-secondary/40 bg-secondary/10 px-3 py-2 text-sm">
           <BellRing className="mt-0.5 h-4 w-4 shrink-0 text-secondary-foreground" />
-          <span>{t("waitingTooLong")} · {waitingMinutes(selectedOrder, now)}m</span>
+          <span>
+            {t('waitingTooLong')} · {waitingMinutes(selectedOrder, now)}m
+          </span>
         </div>
       ) : null}
 
       <div className="space-y-2">
         {selectedOrder.items?.map((item) => (
           <div key={item.id} className="rounded-md border border-border p-3 text-sm">
+            {(() => {
+              const itemStatus = kitchenItemStatus[item.id] || item.kitchenStatus || 'PENDING';
+              return (
             <div className="flex gap-3">
               {item.imageUrl ? (
                 <img
@@ -972,10 +1227,36 @@ function OrderDetailContent({ selectedOrder, onStatus, now }) {
               )}
               <div className="min-w-0 flex-1">
                 <div className="flex justify-between gap-3">
-                  <span className="font-medium">{item.quantity} x {item.itemName}</span>
+                  <span className="font-medium">
+                    {item.quantity} x {item.itemName}
+                  </span>
                   <span className="whitespace-nowrap">{displayUsd(item.subtotalUsd)}</span>
                 </div>
-                {item.spiceLevel && item.spiceLevel !== "NORMAL" ? (
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <KitchenStatusBadge status={itemStatus} />
+                  {canUpdateKitchenItem(selectedOrder) ? (
+                    <div className="flex gap-1.5">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-8 px-2 text-xs"
+                        disabled={['ACCEPTED', 'COMPLETED'].includes(itemStatus)}
+                        onClick={() => onItemStatus(item.id, 'ACCEPTED')}
+                      >
+                        {t('accept')}
+                      </Button>
+                      <Button
+                        type="button"
+                        className="h-8 px-2 text-xs"
+                        disabled={itemStatus === 'COMPLETED'}
+                        onClick={() => onItemStatus(item.id, 'COMPLETED')}
+                      >
+                        {t('complete')}
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+                {item.spiceLevel && item.spiceLevel !== 'NORMAL' ? (
                   <p className="text-xs text-muted-foreground">{item.spiceLevel}</p>
                 ) : null}
                 {item.specialInstructions ? (
@@ -983,42 +1264,53 @@ function OrderDetailContent({ selectedOrder, onStatus, now }) {
                 ) : null}
                 {item.addons?.map((addon) => (
                   <div key={addon.id} className="mt-1 flex justify-between text-muted-foreground">
-                    <span>+ {addon.quantity} x {addon.addonName}</span>
+                    <span>
+                      + {addon.quantity} x {addon.addonName}
+                    </span>
                     <span>{displayUsd(addon.subtotalUsd)}</span>
                   </div>
                 ))}
               </div>
             </div>
+              );
+            })()}
           </div>
         ))}
       </div>
 
       <div className="rounded-md bg-muted p-3 text-sm">
         {selectedOrder.promoCode ? (
-          <div className="mb-1 flex justify-between"><span>{t("promoCode")}</span><span className="font-medium">{selectedOrder.promoCode}</span></div>
+          <div className="mb-1 flex justify-between">
+            <span>{t('promoCode')}</span>
+            <span className="font-medium">{selectedOrder.promoCode}</span>
+          </div>
         ) : null}
-        <div className="flex justify-between"><span>{t("discount")}</span><span>{usd(selectedOrder.discountUsd)}</span></div>
-        <div className="mt-1 flex justify-between font-semibold"><span>{t("total")}</span><span>{displayUsd(selectedOrder.totalUsd)}</span></div>
+        <div className="flex justify-between">
+          <span>{t('discount')}</span>
+          <span>{usd(selectedOrder.discountUsd)}</span>
+        </div>
+        <div className="mt-1 flex justify-between font-semibold">
+          <span>{t('total')}</span>
+          <span>{displayUsd(selectedOrder.totalUsd)}</span>
+        </div>
         <div className="mt-1 text-right text-muted-foreground">{khr(selectedOrder.totalKhr)}</div>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        {NEXT_STATUS[selectedOrder.status] ? (
-          <Button onClick={() => onStatus(selectedOrder.id, NEXT_STATUS[selectedOrder.status])}>
-            <Check className="h-4 w-4" />
-            {dashboardStatusLabel(NEXT_STATUS[selectedOrder.status], t)}
+        {!['COMPLETED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(selectedOrder.status) ? (
+          <Button variant="destructive" onClick={() => onStatus(selectedOrder.id, 'CANCELLED')}>
+            <X className="h-4 w-4" />
+            {t('cancel')}
           </Button>
         ) : null}
-        {!["COMPLETED", "REJECTED", "CANCELLED", "EXPIRED"].includes(selectedOrder.status) ? (
-          <Button variant="destructive" onClick={() => onStatus(selectedOrder.id, "CANCELLED")}>
-                    <X className="h-4 w-4" />
-                    {t("cancel")}
-          </Button>
-        ) : null}
-        <a className="col-span-2" href={`${API_BASE}/api/receipts/orders/${selectedOrder.id}.pdf`} target="_blank">
+        <a
+          className="col-span-2"
+          href={`${API_BASE}/api/receipts/orders/${selectedOrder.id}.pdf`}
+          target="_blank"
+        >
           <Button variant="outline" className="w-full">
             <Printer className="h-4 w-4" />
-            {t("receipt")}
+            {t('receipt')}
           </Button>
         </a>
       </div>
@@ -1026,18 +1318,146 @@ function OrderDetailContent({ selectedOrder, onStatus, now }) {
   );
 }
 
+// Kitchen
+
+function KitchenView({ items, statusMap = {}, onGroupStatus, now }) {
+  const { t } = useLanguage();
+  const cards = useMemo(() => groupKitchenCards(items, statusMap), [items, statusMap]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold">{t('kitchen')}</h2>
+          <p className="text-sm text-muted-foreground">{t('kitchenPaidItems')}</p>
+        </div>
+        <Badge tone="primary">{cards.length}</Badge>
+      </div>
+
+      {cards.length === 0 ? (
+        <Card>
+          <CardContent className="flex min-h-48 items-center justify-center text-sm text-muted-foreground">
+            {t('noKitchenItems')}
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid auto-rows-fr gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {cards.map((item) => (
+            <KitchenItemCard
+              key={item.key}
+              item={item}
+              now={now}
+              onGroupStatus={onGroupStatus}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KitchenItemCard({ item, now, onGroupStatus }) {
+  const { t } = useLanguage();
+  const imageUrl = displayImageUrl(item.imageUrl);
+  const isComplete = item.kitchenStatus === 'COMPLETED';
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="aspect-[5/3] bg-muted">
+        <img
+          src={imageUrl}
+          alt={item.itemName}
+          className="h-full w-full object-cover"
+          onError={replaceBrokenImage}
+        />
+      </div>
+      <CardContent className="flex h-full flex-col gap-3 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-muted-foreground">
+              {item.categoryName || t('category')}
+            </div>
+            <h3 className="mt-0.5 line-clamp-2 text-base font-semibold">{item.itemName}</h3>
+          </div>
+          <KitchenStatusBadge status={item.kitchenStatus} />
+        </div>
+
+        <div className="rounded-md bg-muted/50 p-3 text-sm font-semibold">
+          {t('totalQuantityLabel')} {item.totalQuantity}
+        </div>
+
+        <div className="space-y-2 text-sm">
+          {item.rows.map((row) => {
+            const addonText = formatKitchenAddons(row.addons);
+            return (
+              <div key={row.id} className="rounded-md border border-border bg-muted/20 p-3">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-medium">
+                  <span>{row.tableNumber}</span>
+                  <span className="text-muted-foreground">-</span>
+                  <span>
+                    {t('qty')}: {row.quantity}
+                  </span>
+                  <span className="text-muted-foreground">-</span>
+                  <span>{t('minutesAgo').replace('{minutes}', kitchenItemMinutes(row, now))}</span>
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {t('addons')}: {addonText || '-'}
+                </div>
+                {row.specialInstructions ? (
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {t('note')}: {row.specialInstructions}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-auto grid grid-cols-2 gap-2 pt-1">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={['ACCEPTED', 'COMPLETED'].includes(item.kitchenStatus)}
+            onClick={() => onGroupStatus(item.itemIds, 'ACCEPTED')}
+          >
+            {t('accept')}
+          </Button>
+          <Button
+            type="button"
+            disabled={isComplete}
+            onClick={() => onGroupStatus(item.itemIds, 'COMPLETED')}
+          >
+            {t('complete')}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // Menu
 
 function MenuView({ menu, request, reload }) {
   const { t } = useLanguage();
-  const emptyForm = { categoryId: "", name: "", priceUsd: "", description: "", dietaryTags: "", imageUrl: "", available: true, sortOrder: 100 };
+  const emptyForm = {
+    categoryId: '',
+    name: '',
+    priceUsd: '',
+    description: '',
+    dietaryTags: '',
+    imageUrl: '',
+    available: true,
+    sortOrder: 100,
+  };
   const [form, setForm] = useState(emptyForm);
   const [editingItem, setEditingItem] = useState(null);
-  const [search, setSearch] = useState("");
-  const [message, setMessage] = useState("");
-  const items = menu.items.filter((item) => `${item.name} ${item.description}`.toLowerCase().includes(search.toLowerCase()));
+  const [search, setSearch] = useState('');
+  const [message, setMessage] = useState('');
+  const items = menu.items.filter((item) =>
+    `${item.name} ${item.description}`.toLowerCase().includes(search.toLowerCase())
+  );
 
-  function resetForm(nextMessage = "") {
+  function resetForm(nextMessage = '') {
     setEditingItem(null);
     setForm(emptyForm);
     setMessage(nextMessage);
@@ -1045,16 +1465,16 @@ function MenuView({ menu, request, reload }) {
 
   function editItem(item) {
     setEditingItem(item);
-    setMessage("");
+    setMessage('');
     setForm({
       categoryId: item.categoryId,
-      name: item.name || "",
-      priceUsd: String(item.priceUsd ?? ""),
-      description: item.description || "",
-      dietaryTags: item.dietaryTags || "",
-      imageUrl: item.imageUrl || "",
+      name: item.name || '',
+      priceUsd: String(item.priceUsd ?? ''),
+      description: item.description || '',
+      dietaryTags: item.dietaryTags || '',
+      imageUrl: item.imageUrl || '',
       available: item.available,
-      sortOrder: item.sortOrder ?? 100
+      sortOrder: item.sortOrder ?? 100,
     });
   }
 
@@ -1062,32 +1482,38 @@ function MenuView({ menu, request, reload }) {
     const file = event.target.files?.[0];
     if (!file) return;
     const data = new FormData();
-    data.append("file", file);
-    const uploaded = await request("/api/admin/uploads/menu-images", { method: "POST", body: data });
+    data.append('file', file);
+    const uploaded = await request('/api/admin/uploads/menu-images', {
+      method: 'POST',
+      body: data,
+    });
     setForm((current) => ({ ...current, imageUrl: uploaded.url }));
   }
 
   async function saveItem(event) {
     event.preventDefault();
-    setMessage("");
+    setMessage('');
     const payload = {
       ...form,
       priceUsd: Number(form.priceUsd),
       priceKhr: null,
       available: Boolean(form.available),
-      sortOrder: Number(form.sortOrder || 0)
+      sortOrder: Number(form.sortOrder || 0),
     };
-    await request(editingItem ? `/api/admin/menu/items/${editingItem.id}` : "/api/admin/menu/items", {
-      method: editingItem ? "PUT" : "POST",
-      body: JSON.stringify(payload)
-    });
-    resetForm(editingItem ? t("menuItemUpdated") : t("menuItemCreated"));
+    await request(
+      editingItem ? `/api/admin/menu/items/${editingItem.id}` : '/api/admin/menu/items',
+      {
+        method: editingItem ? 'PUT' : 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+    resetForm(editingItem ? t('menuItemUpdated') : t('menuItemCreated'));
     reload();
   }
 
   async function toggle(item) {
     await request(`/api/admin/menu/items/${item.id}`, {
-      method: "PUT",
+      method: 'PUT',
       body: JSON.stringify({
         categoryId: item.categoryId,
         name: item.name,
@@ -1097,8 +1523,8 @@ function MenuView({ menu, request, reload }) {
         imageUrl: item.imageUrl,
         available: !item.available,
         dietaryTags: item.dietaryTags,
-        sortOrder: item.sortOrder || 0
-      })
+        sortOrder: item.sortOrder || 0,
+      }),
     });
     reload();
   }
@@ -1107,36 +1533,91 @@ function MenuView({ menu, request, reload }) {
     <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
       <Card className="lg:sticky lg:top-24 lg:self-start">
         <CardHeader className="flex-row items-center justify-between gap-3">
-          <CardTitle>{editingItem ? t("editMenuItem") : t("newMenuItem")}</CardTitle>
+          <CardTitle>{editingItem ? t('editMenuItem') : t('newMenuItem')}</CardTitle>
           {editingItem ? (
-            <Button type="button" variant="outline" onClick={resetForm}>{t("new")}</Button>
+            <Button type="button" variant="outline" onClick={resetForm}>
+              {t('new')}
+            </Button>
           ) : null}
         </CardHeader>
         <CardContent className="max-h-[calc(100vh-9rem)] overflow-auto">
-          {message ? <div className="mb-3 rounded-md bg-muted px-3 py-2 text-sm">{message}</div> : null}
+          {message ? (
+            <div className="mb-3 rounded-md bg-muted px-3 py-2 text-sm">{message}</div>
+          ) : null}
           <form className="space-y-3" onSubmit={saveItem}>
-            <Select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })} required>
-              <option value="">{t("category")}</option>
-              {menu.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            <Select
+              value={form.categoryId}
+              onChange={(e) => setForm({ ...form, categoryId: e.target.value })}
+              required
+            >
+              <option value="">{t('category')}</option>
+              {menu.categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
             </Select>
-            <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={t("sortItemName")} required />
-            <Input value={form.priceUsd} onChange={(e) => setForm({ ...form, priceUsd: e.target.value })} placeholder="USD" type="number" step="0.01" required />
-            <Input value={form.sortOrder} onChange={(e) => setForm({ ...form, sortOrder: e.target.value })} placeholder={t("sortOrderNo")} type="number" min="0" />
-            <Select value={form.available ? "true" : "false"} onChange={(e) => setForm({ ...form, available: e.target.value === "true" })}>
-              <option value="true">{t("available")}</option>
-              <option value="false">{t("hidden")}</option>
+            <Input
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder={t('sortItemName')}
+              required
+            />
+            <Input
+              value={form.priceUsd}
+              onChange={(e) => setForm({ ...form, priceUsd: e.target.value })}
+              placeholder="USD"
+              type="number"
+              step="0.01"
+              required
+            />
+            <Input
+              value={form.sortOrder}
+              onChange={(e) => setForm({ ...form, sortOrder: e.target.value })}
+              placeholder={t('sortOrderNo')}
+              type="number"
+              min="0"
+            />
+            <Select
+              value={form.available ? 'true' : 'false'}
+              onChange={(e) => setForm({ ...form, available: e.target.value === 'true' })}
+            >
+              <option value="true">{t('available')}</option>
+              <option value="false">{t('hidden')}</option>
             </Select>
-            <Input value={form.imageUrl} onChange={(e) => setForm({ ...form, imageUrl: e.target.value })} placeholder={t("imageUrl")} />
+            <Input
+              value={form.imageUrl}
+              onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
+              placeholder={t('imageUrl')}
+            />
             <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-muted">
               <Upload className="h-4 w-4" />
-              {t("uploadImage")}
-              <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={uploadImage} />
+              {t('uploadImage')}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={uploadImage}
+              />
             </label>
-            <Input value={form.dietaryTags} onChange={(e) => setForm({ ...form, dietaryTags: e.target.value })} placeholder={t("tagsLabel")} />
-            <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder={t("noDescription")} />
+            <Input
+              value={form.dietaryTags}
+              onChange={(e) => setForm({ ...form, dietaryTags: e.target.value })}
+              placeholder={t('tagsLabel')}
+            />
+            <Textarea
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              placeholder={t('noDescription')}
+            />
             <div className="grid grid-cols-2 gap-2">
-              <Button className="w-full"><Check className="h-4 w-4" />{editingItem ? t("save") : t("create")}</Button>
-              <Button type="button" variant="outline" className="w-full" onClick={resetForm}>{t("clearFilters")}</Button>
+              <Button className="w-full">
+                <Check className="h-4 w-4" />
+                {editingItem ? t('save') : t('create')}
+              </Button>
+              <Button type="button" variant="outline" className="w-full" onClick={resetForm}>
+                {t('clearFilters')}
+              </Button>
             </div>
           </form>
         </CardContent>
@@ -1144,10 +1625,15 @@ function MenuView({ menu, request, reload }) {
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
-            <CardTitle>{t("menu")}</CardTitle>
+            <CardTitle>{t('menu')}</CardTitle>
             <div className="relative w-72 max-w-full">
               <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" placeholder={t("search")} />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-9"
+                placeholder={t('search')}
+              />
             </div>
           </div>
         </CardHeader>
@@ -1155,23 +1641,41 @@ function MenuView({ menu, request, reload }) {
           {items.map((item) => (
             <div key={item.id} className="flex h-full flex-col rounded-md border border-border p-3">
               <div className="flex flex-1 flex-col items-center gap-3 text-center">
-                <img src={displayImageUrl(item.imageUrl)} alt={item.name} className="h-24 w-24 rounded-md object-cover" onError={replaceBrokenImage} />
+                <img
+                  src={displayImageUrl(item.imageUrl)}
+                  alt={item.name}
+                  className="h-24 w-24 rounded-md object-cover"
+                  onError={replaceBrokenImage}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-col items-center gap-2">
                     <h3 className="line-clamp-2 min-h-10 font-semibold">{item.name}</h3>
-                    <Badge tone={item.available ? "primary" : "danger"}>{item.available ? t("available") : t("hidden")}</Badge>
+                    <Badge tone={item.available ? 'primary' : 'danger'}>
+                      {item.available ? t('available') : t('hidden')}
+                    </Badge>
                   </div>
-                  <p className="line-clamp-2 min-h-10 text-sm text-muted-foreground">{item.description}</p>
+                  <p className="line-clamp-2 min-h-10 text-sm text-muted-foreground">
+                    {item.description}
+                  </p>
                   <div className="mt-2 flex min-h-7 flex-wrap justify-center gap-1">
-                    {tags(item.dietaryTags).map((tag) => <Badge key={tag}>{tag}</Badge>)}
+                    {tags(item.dietaryTags).map((tag) => (
+                      <Badge key={tag}>{tag}</Badge>
+                    ))}
                   </div>
                 </div>
               </div>
               <div className="mt-auto flex flex-col items-center gap-3 pt-3 text-sm">
-                <span className="whitespace-nowrap">{displayUsd(item.priceUsd)} / {khr(item.priceKhr)}</span>
+                <span className="whitespace-nowrap">
+                  {displayUsd(item.priceUsd)} / {khr(item.priceKhr)}
+                </span>
                 <div className="flex gap-2">
-                  <Button type="button" variant="outline" onClick={() => editItem(item)}><Pencil className="h-4 w-4" />{t("edit")}</Button>
-                  <Button type="button" variant="outline" onClick={() => toggle(item)}>{item.available ? t("disable") : t("enable")}</Button>
+                  <Button type="button" variant="outline" onClick={() => editItem(item)}>
+                    <Pencil className="h-4 w-4" />
+                    {t('edit')}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => toggle(item)}>
+                    {item.available ? t('disable') : t('enable')}
+                  </Button>
                 </div>
               </div>
             </div>
@@ -1186,33 +1690,53 @@ function MenuView({ menu, request, reload }) {
 
 function TablesView({ tables, request, reload }) {
   const { t } = useLanguage();
-  const [form, setForm] = useState({ tableNumber: "", label: "", capacity: 4, active: true });
+  const [form, setForm] = useState({ tableNumber: '', label: '', capacity: 4, active: true });
 
   async function createTable(event) {
     event.preventDefault();
-    await request("/api/admin/tables", { method: "POST", body: JSON.stringify(form) });
-    setForm({ tableNumber: "", label: "", capacity: 4, active: true });
+    await request('/api/admin/tables', { method: 'POST', body: JSON.stringify(form) });
+    setForm({ tableNumber: '', label: '', capacity: 4, active: true });
     reload();
   }
 
   function printTable(table) {
     const svg = document.querySelector(`[data-qr="${table.id}"] svg`);
-    const qr = svg ? new XMLSerializer().serializeToString(svg) : "";
-    const win = window.open("", "_blank");
-    win.document.write(`<html><body style="font-family:sans-serif;text-align:center;padding:32px"><h1>HappyBoat</h1><h2>${table.label}</h2><div>${qr}</div><p>${table.qrUrl}</p></body></html>`);
+    const qr = svg ? new XMLSerializer().serializeToString(svg) : '';
+    const win = window.open('', '_blank');
+    win.document.write(
+      `<html><body style="font-family:sans-serif;text-align:center;padding:32px"><h1>HappyBoat</h1><h2>${table.label}</h2><div>${qr}</div><p>${table.qrUrl}</p></body></html>`
+    );
     win.print();
   }
 
   return (
     <div className="grid gap-5 lg:grid-cols-[320px_1fr]">
       <Card className="lg:sticky lg:top-24 lg:self-start">
-        <CardHeader><CardTitle>{t("newTable")}</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>{t('newTable')}</CardTitle>
+        </CardHeader>
         <CardContent className="max-h-[calc(100vh-9rem)] overflow-auto">
           <form className="space-y-3" onSubmit={createTable}>
-            <Input value={form.tableNumber} onChange={(e) => setForm({ ...form, tableNumber: e.target.value.toUpperCase() })} placeholder="T05" required />
-            <Input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder={t("label")} required />
-            <Input value={form.capacity} onChange={(e) => setForm({ ...form, capacity: Number(e.target.value) })} placeholder={t("capacity")} type="number" min="1" />
-            <Button className="w-full">{t("create")}</Button>
+            <Input
+              value={form.tableNumber}
+              onChange={(e) => setForm({ ...form, tableNumber: e.target.value.toUpperCase() })}
+              placeholder="T05"
+              required
+            />
+            <Input
+              value={form.label}
+              onChange={(e) => setForm({ ...form, label: e.target.value })}
+              placeholder={t('label')}
+              required
+            />
+            <Input
+              value={form.capacity}
+              onChange={(e) => setForm({ ...form, capacity: Number(e.target.value) })}
+              placeholder={t('capacity')}
+              type="number"
+              min="1"
+            />
+            <Button className="w-full">{t('create')}</Button>
           </form>
         </CardContent>
       </Card>
@@ -1225,17 +1749,27 @@ function TablesView({ tables, request, reload }) {
                   <h3 className="font-semibold">{table.label}</h3>
                   <p className="text-sm text-muted-foreground">{table.tableNumber}</p>
                 </div>
-                <Badge tone={table.active ? "primary" : "danger"}>{table.active ? t("available") : t("inactive")}</Badge>
+                <Badge tone={table.active ? 'primary' : 'danger'}>
+                  {table.active ? t('available') : t('inactive')}
+                </Badge>
               </div>
-              <div className="inline-flex rounded-lg border border-border bg-[#fff] p-3 text-[#000]" data-qr={table.id}>
+              <div
+                className="inline-flex rounded-lg border border-border bg-[#fff] p-3 text-[#000]"
+                data-qr={table.id}
+              >
                 <QRCodeSVG value={table.qrUrl} size={160} includeMargin />
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <Button variant="outline" onClick={() => downloadSvg(table.id, `${table.tableNumber}.svg`)}>
-                  <Download className="h-4 w-4" />SVG
+                <Button
+                  variant="outline"
+                  onClick={() => downloadSvg(table.id, `${table.tableNumber}.svg`)}
+                >
+                  <Download className="h-4 w-4" />
+                  SVG
                 </Button>
                 <Button variant="outline" onClick={() => printTable(table)}>
-                  <Printer className="h-4 w-4" />{t("print")}
+                  <Printer className="h-4 w-4" />
+                  {t('print')}
                 </Button>
               </div>
             </CardContent>
@@ -1252,30 +1786,30 @@ function PaymentsView({ payments, request, reload }) {
   const { t } = useLanguage();
   const [selected, setSelected] = useState(null);
   const [confirmingId, setConfirmingId] = useState(null);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState('');
 
   async function select(paymentId) {
-    setMessage("");
+    setMessage('');
     setSelected(await request(`/api/admin/payments/${paymentId}`));
   }
 
   async function confirmPaid(paymentId) {
     if (!paymentId || confirmingId) return;
 
-    const ok = window.confirm(
-      t("confirmPaymentPrompt")
-    );
+    const ok = window.confirm(t('confirmPaymentPrompt'));
     if (!ok) return;
 
-    setMessage("");
+    setMessage('');
     setConfirmingId(paymentId);
     try {
-      const updated = await request(`/api/admin/payments/${paymentId}/confirm-paid`, { method: "POST" });
+      const updated = await request(`/api/admin/payments/${paymentId}/confirm-paid`, {
+        method: 'POST',
+      });
       setSelected(updated);
       await reload();
-      setMessage(t("paymentMarkedPaid"));
+      setMessage(t('paymentMarkedPaid'));
     } catch (error) {
-      setMessage(error.message || t("failedConfirmPayment"));
+      setMessage(error.message || t('failedConfirmPayment'));
     } finally {
       setConfirmingId(null);
     }
@@ -1285,36 +1819,50 @@ function PaymentsView({ payments, request, reload }) {
     <div className="grid gap-5 lg:grid-cols-[1fr_440px]">
       <Card>
         <CardHeader className="flex-row items-center justify-between">
-          <CardTitle>{t("payments")}</CardTitle>
-          <Button variant="outline" size="icon" onClick={reload} aria-label={t("refresh")}>
+          <CardTitle>{t('payments')}</CardTitle>
+          <Button variant="outline" size="icon" onClick={reload} aria-label={t('refresh')}>
             <RefreshCw className="h-4 w-4" />
           </Button>
         </CardHeader>
         <CardContent className="space-y-3">
           {message ? (
             <div className="flex items-start gap-2 rounded-md border border-secondary/40 bg-secondary/10 px-3 py-2 text-sm">
-              {message === t("paymentMarkedPaid") ? <Check className="mt-0.5 h-4 w-4 text-primary" /> : null}
+              {message === t('paymentMarkedPaid') ? (
+                <Check className="mt-0.5 h-4 w-4 text-primary" />
+              ) : null}
               <span>{message}</span>
             </div>
           ) : null}
           {payments.map((payment) => (
-            <button key={payment.id} onClick={() => select(payment.id)} className="w-full rounded-md border border-border p-4 text-left hover:border-primary">
+            <button
+              key={payment.id}
+              onClick={() => select(payment.id)}
+              className="w-full rounded-md border border-border p-4 text-left hover:border-primary"
+            >
               <div className="flex justify-between gap-3">
                 <div>
                   <div className="font-semibold">{payment.paymentNumber}</div>
-                  <div className="text-sm text-muted-foreground">{payment.orderNumber} - {payment.tableNumber}</div>
+                  <div className="text-sm text-muted-foreground">
+                    {payment.orderNumber} - {payment.tableNumber}
+                  </div>
                 </div>
                 <StatusBadge status={payment.status} />
               </div>
-              <div className="mt-2 text-sm">{displayUsd(payment.amountUsd)} / {khr(payment.amountKhr)}</div>
+              <div className="mt-2 text-sm">
+                {displayUsd(payment.amountUsd)} / {khr(payment.amountKhr)}
+              </div>
             </button>
           ))}
         </CardContent>
       </Card>
       <Card className="lg:sticky lg:top-24 lg:self-start">
-        <CardHeader><CardTitle>{t("transactionLog")}</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>{t('transactionLog')}</CardTitle>
+        </CardHeader>
         <CardContent className="max-h-[calc(100vh-9rem)] overflow-auto">
-          {!selected ? <p className="text-sm text-muted-foreground">{t("selectPayment")}</p> : (
+          {!selected ? (
+            <p className="text-sm text-muted-foreground">{t('selectPayment')}</p>
+          ) : (
             <div className="space-y-3">
               <div className="text-sm">
                 <div className="flex items-start justify-between gap-3">
@@ -1325,30 +1873,41 @@ function PaymentsView({ payments, request, reload }) {
                   <StatusBadge status={selected.status} />
                 </div>
                 <div className="mt-3 grid gap-2 rounded-md bg-muted p-3 text-xs">
-                  <div><b>{t("order")}:</b> {selected.orderNumber || selected.orderId}</div>
-                  <div><b>{t("reference")}:</b> {selected.bakongReference || "-"}</div>
-                  <div><b>{t("transaction")}:</b> {selected.bakongTransactionHash || "-"}</div>
-                  <div><b>{t("total")}:</b> {displayUsd(selected.amountUsd)} / {khr(selected.amountKhr)}</div>
+                  <div>
+                    <b>{t('order')}:</b> {selected.orderNumber || selected.orderId}
+                  </div>
+                  <div>
+                    <b>{t('reference')}:</b> {selected.bakongReference || '-'}
+                  </div>
+                  <div>
+                    <b>{t('transaction')}:</b> {selected.bakongTransactionHash || '-'}
+                  </div>
+                  <div>
+                    <b>{t('total')}:</b> {displayUsd(selected.amountUsd)} /{' '}
+                    {khr(selected.amountKhr)}
+                  </div>
                 </div>
               </div>
 
-              {selected.status !== "PAID" ? (
+              {selected.status !== 'PAID' ? (
                 <Button
                   className="w-full"
                   onClick={() => confirmPaid(selected.id)}
                   disabled={confirmingId === selected.id}
                 >
-                  {confirmingId === selected.id ? t("confirming") : t("confirmPaid")}
+                  {confirmingId === selected.id ? t('confirming') : t('confirmPaid')}
                 </Button>
               ) : (
                 <div className="rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-primary">
-                  {t("paymentAlreadyPaid")}
+                  {t('paymentAlreadyPaid')}
                 </div>
               )}
 
               <div className="max-h-[60vh] space-y-2 overflow-auto">
                 {(selected.transactions || []).map((tx) => (
-                  <pre key={tx.id} className="overflow-auto rounded-md bg-muted p-3 text-xs">{JSON.stringify(tx, null, 2)}</pre>
+                  <pre key={tx.id} className="overflow-auto rounded-md bg-muted p-3 text-xs">
+                    {JSON.stringify(tx, null, 2)}
+                  </pre>
                 ))}
               </div>
             </div>
@@ -1363,12 +1922,19 @@ function PaymentsView({ payments, request, reload }) {
 
 function PromoCodesView({ promos, request, reload }) {
   const { t } = useLanguage();
-  const emptyForm = { code: "", description: "", discountType: "PERCENT", discountValue: "", maxDiscountUsd: "", active: true };
+  const emptyForm = {
+    code: '',
+    description: '',
+    discountType: 'PERCENT',
+    discountValue: '',
+    maxDiscountUsd: '',
+    active: true,
+  };
   const [form, setForm] = useState(emptyForm);
   const [editingPromo, setEditingPromo] = useState(null);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState('');
 
-  function resetForm(nextMessage = "") {
+  function resetForm(nextMessage = '') {
     setEditingPromo(null);
     setForm(emptyForm);
     setMessage(nextMessage);
@@ -1376,34 +1942,35 @@ function PromoCodesView({ promos, request, reload }) {
 
   function editPromo(promo) {
     setEditingPromo(promo);
-    setMessage("");
+    setMessage('');
     setForm({
-      code: promo.code || "",
-      description: promo.description || "",
-      discountType: promo.discountType || "PERCENT",
-      discountValue: String(promo.discountValue ?? ""),
-      maxDiscountUsd: String(promo.maxDiscountUsd ?? ""),
-      active: Boolean(promo.active)
+      code: promo.code || '',
+      description: promo.description || '',
+      discountType: promo.discountType || 'PERCENT',
+      discountValue: String(promo.discountValue ?? ''),
+      maxDiscountUsd: String(promo.maxDiscountUsd ?? ''),
+      active: Boolean(promo.active),
     });
   }
 
   async function savePromo(event) {
     event.preventDefault();
-    setMessage("");
+    setMessage('');
     const payload = {
       ...form,
       code: form.code.trim().toUpperCase(),
       discountValue: Number(form.discountValue || 0),
-      maxDiscountUsd: form.discountType === "PERCENT" && form.maxDiscountUsd !== ""
-        ? Number(form.maxDiscountUsd)
-        : null,
-      active: Boolean(form.active)
+      maxDiscountUsd:
+        form.discountType === 'PERCENT' && form.maxDiscountUsd !== ''
+          ? Number(form.maxDiscountUsd)
+          : null,
+      active: Boolean(form.active),
     };
-    await request(editingPromo ? `/api/admin/promos/${editingPromo.id}` : "/api/admin/promos", {
-      method: editingPromo ? "PUT" : "POST",
-      body: JSON.stringify(payload)
+    await request(editingPromo ? `/api/admin/promos/${editingPromo.id}` : '/api/admin/promos', {
+      method: editingPromo ? 'PUT' : 'POST',
+      body: JSON.stringify(payload),
     });
-    resetForm(editingPromo ? t("promoCodeUpdated") : t("promoCodeCreated"));
+    resetForm(editingPromo ? t('promoCodeUpdated') : t('promoCodeCreated'));
     reload();
   }
 
@@ -1411,55 +1978,70 @@ function PromoCodesView({ promos, request, reload }) {
     <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
       <Card className="lg:sticky lg:top-24 lg:self-start">
         <CardHeader className="flex-row items-center justify-between gap-3">
-          <CardTitle>{editingPromo ? t("editPromoCode") : t("newPromoCode")}</CardTitle>
+          <CardTitle>{editingPromo ? t('editPromoCode') : t('newPromoCode')}</CardTitle>
           {editingPromo ? (
-            <Button type="button" variant="outline" onClick={resetForm}>{t("new")}</Button>
+            <Button type="button" variant="outline" onClick={resetForm}>
+              {t('new')}
+            </Button>
           ) : null}
         </CardHeader>
         <CardContent className="max-h-[calc(100vh-9rem)] overflow-auto">
-          {message ? <div className="mb-3 rounded-md bg-muted px-3 py-2 text-sm">{message}</div> : null}
+          {message ? (
+            <div className="mb-3 rounded-md bg-muted px-3 py-2 text-sm">{message}</div>
+          ) : null}
           <form className="space-y-3" onSubmit={savePromo}>
             <Input
               value={form.code}
               onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
-              placeholder={t("promoCode")}
+              placeholder={t('promoCode')}
               required
             />
             <Textarea
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
-              placeholder={t("noDescription")}
+              placeholder={t('noDescription')}
             />
-            <Select value={form.discountType} onChange={(e) => setForm({ ...form, discountType: e.target.value })}>
-              <option value="PERCENT">{t("percentDiscount")}</option>
-              <option value="FIXED_USD">{t("fixedUsdDiscount")}</option>
+            <Select
+              value={form.discountType}
+              onChange={(e) => setForm({ ...form, discountType: e.target.value })}
+            >
+              <option value="PERCENT">{t('percentDiscount')}</option>
+              <option value="FIXED_USD">{t('fixedUsdDiscount')}</option>
             </Select>
             <Input
               value={form.discountValue}
               onChange={(e) => setForm({ ...form, discountValue: e.target.value })}
-              placeholder={form.discountType === "PERCENT" ? t("percentDiscount") : "USD"}
+              placeholder={form.discountType === 'PERCENT' ? t('percentDiscount') : 'USD'}
               type="number"
               min="0"
               step="0.01"
               required
             />
-            {form.discountType === "PERCENT" ? (
+            {form.discountType === 'PERCENT' ? (
               <Input
                 value={form.maxDiscountUsd}
                 onChange={(e) => setForm({ ...form, maxDiscountUsd: e.target.value })}
-                placeholder={t("maxDiscountUsd")}
+                placeholder={t('maxDiscountUsd')}
                 type="number"
                 min="0"
                 step="0.01"
               />
             ) : null}
-            <Select value={form.active ? "true" : "false"} onChange={(e) => setForm({ ...form, active: e.target.value === "true" })}>
-              <option value="true">{t("available")}</option>
-              <option value="false">{t("inactive")}</option>
+            <Select
+              value={form.active ? 'true' : 'false'}
+              onChange={(e) => setForm({ ...form, active: e.target.value === 'true' })}
+            >
+              <option value="true">{t('available')}</option>
+              <option value="false">{t('inactive')}</option>
             </Select>
             <div className="grid grid-cols-2 gap-2">
-              <Button className="w-full"><Check className="h-4 w-4" />{editingPromo ? t("save") : t("create")}</Button>
-              <Button type="button" variant="outline" className="w-full" onClick={resetForm}>{t("clearFilters")}</Button>
+              <Button className="w-full">
+                <Check className="h-4 w-4" />
+                {editingPromo ? t('save') : t('create')}
+              </Button>
+              <Button type="button" variant="outline" className="w-full" onClick={resetForm}>
+                {t('clearFilters')}
+              </Button>
             </div>
           </form>
         </CardContent>
@@ -1467,26 +2049,30 @@ function PromoCodesView({ promos, request, reload }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>{t("promoCodes")}</CardTitle>
+          <CardTitle>{t('promoCodes')}</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-2">
           {promos.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{t("noPromoCodes")}</p>
+            <p className="text-sm text-muted-foreground">{t('noPromoCodes')}</p>
           ) : (
             promos.map((promo) => (
               <div key={promo.id} className="rounded-md border border-border p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h3 className="font-semibold">{promo.code}</h3>
-                    <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{promo.description || t("noDescription")}</p>
+                    <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                      {promo.description || t('noDescription')}
+                    </p>
                   </div>
-                  <Badge tone={promo.active ? "primary" : "danger"}>{promo.active ? t("available") : t("inactive")}</Badge>
+                  <Badge tone={promo.active ? 'primary' : 'danger'}>
+                    {promo.active ? t('available') : t('inactive')}
+                  </Badge>
                 </div>
                 <div className="mt-3 flex items-center justify-between gap-3 text-sm">
                   <span>{formatPromoValue(promo)}</span>
                   <Button type="button" variant="outline" onClick={() => editPromo(promo)}>
                     <Pencil className="h-4 w-4" />
-                    {t("edit")}
+                    {t('edit')}
                   </Button>
                 </div>
               </div>
@@ -1506,11 +2092,11 @@ function AnalyticsView({ analytics, error, lastUpdatedAt, onRefresh }) {
     return (
       <Card>
         <CardContent className="flex min-h-48 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-          <span>{error || t("loadingAnalytics")}</span>
+          <span>{error || t('loadingAnalytics')}</span>
           {error ? (
             <Button type="button" variant="outline" onClick={onRefresh}>
               <RefreshCw className="h-4 w-4" />
-              {t("refresh")}
+              {t('refresh')}
             </Button>
           ) : null}
         </CardContent>
@@ -1522,11 +2108,15 @@ function AnalyticsView({ analytics, error, lastUpdatedAt, onRefresh }) {
   const weeklyOrders = Number(analytics.weekly?.weeklyOrderCount || 0);
   const dailyRevenue = Number(analytics.daily?.dailyRevenueUsd || 0);
   const weeklyRevenue = Number(analytics.weekly?.weeklyRevenueUsd || 0);
-  const activeOrders = sumRows(analytics.orderCountByStatus, "count", (row) =>
-    ["PENDING_PAYMENT", "PAID", "RECEIVED", "PREPARING", "READY"].includes(row.status)
+  const activeOrders = sumRows(analytics.orderCountByStatus, 'count', (row) =>
+    ['PENDING_PAYMENT', 'PAID', 'RECEIVED', 'PREPARING'].includes(row.status)
   );
-  const paidPayments = sumRows(analytics.paymentBreakdown, "count", (row) => row.paymentMethod !== "UNPAID");
-  const totalPayments = sumRows(analytics.paymentBreakdown, "count");
+  const paidPayments = sumRows(
+    analytics.paymentBreakdown,
+    'count',
+    (row) => row.paymentMethod !== 'UNPAID'
+  );
+  const totalPayments = sumRows(analytics.paymentBreakdown, 'count');
   const paymentRate = totalPayments ? Math.round((paidPayments / totalPayments) * 100) : 0;
   const topItem = analytics.topSellingItems?.[0];
   const topTable = analytics.revenueByTable?.[0];
@@ -1535,22 +2125,48 @@ function AnalyticsView({ analytics, error, lastUpdatedAt, onRefresh }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold">{t("analytics")}</h2>
+          <h2 className="text-xl font-semibold">{t('analytics')}</h2>
           <p className="text-sm text-muted-foreground">
-            {lastUpdatedAt ? `${t("updated")} ${formatClockTime(lastUpdatedAt)}` : t("liveRestaurantOps")}
+            {lastUpdatedAt
+              ? `${t('updated')} ${formatClockTime(lastUpdatedAt)}`
+              : t('liveRestaurantOps')}
           </p>
         </div>
         <Button variant="outline" onClick={onRefresh}>
           <RefreshCw className="h-4 w-4" />
-          {t("refresh")}
+          {t('refresh')}
         </Button>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric icon={CalendarDays} title={t("dailyRevenue")} value={usd(dailyRevenue)} sub={`${dailyOrders} ${t("orders")} · ${khr(analytics.daily?.dailyRevenueKhr)}`} tone="primary" />
-        <Metric icon={BarChart3} title={t("weeklyRevenue")} value={usd(weeklyRevenue)} sub={`${weeklyOrders} ${t("orders")} · ${khr(analytics.weekly?.weeklyRevenueKhr)}`} tone="accent" />
-        <Metric icon={CreditCard} title={t("averageOrder")} value={usd(analytics.averageOrderValue?.averageOrderValueUsd)} sub={khr(analytics.averageOrderValue?.averageOrderValueKhr)} tone="secondary" />
-        <Metric icon={Clock} title={t("activeOrders")} value={String(activeOrders)} sub={`${paymentRate}% ${t("paidPayments")}`} tone="muted" />
+        <Metric
+          icon={CalendarDays}
+          title={t('dailyRevenue')}
+          value={usd(dailyRevenue)}
+          sub={`${dailyOrders} ${t('orders')} · ${khr(analytics.daily?.dailyRevenueKhr)}`}
+          tone="primary"
+        />
+        <Metric
+          icon={BarChart3}
+          title={t('weeklyRevenue')}
+          value={usd(weeklyRevenue)}
+          sub={`${weeklyOrders} ${t('orders')} · ${khr(analytics.weekly?.weeklyRevenueKhr)}`}
+          tone="accent"
+        />
+        <Metric
+          icon={CreditCard}
+          title={t('averageOrder')}
+          value={usd(analytics.averageOrderValue?.averageOrderValueUsd)}
+          sub={khr(analytics.averageOrderValue?.averageOrderValueKhr)}
+          tone="secondary"
+        />
+        <Metric
+          icon={Clock}
+          title={t('activeOrders')}
+          value={String(activeOrders)}
+          sub={`${paymentRate}% ${t('paidPayments')}`}
+          tone="muted"
+        />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
@@ -1561,8 +2177,10 @@ function AnalyticsView({ analytics, error, lastUpdatedAt, onRefresh }) {
       <div className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
         <Card>
           <CardHeader className="flex-row items-center justify-between gap-3">
-            <CardTitle>{t("sortStatus")}</CardTitle>
-            <Badge tone="secondary">{activeOrders} {t("active")}</Badge>
+            <CardTitle>{t('sortStatus')}</CardTitle>
+            <Badge tone="secondary">
+              {activeOrders} {t('active')}
+            </Badge>
           </CardHeader>
           <CardContent>
             <StatusFunnel rows={analytics.orderCountByStatus} />
@@ -1571,20 +2189,58 @@ function AnalyticsView({ analytics, error, lastUpdatedAt, onRefresh }) {
 
         <Card>
           <CardHeader>
-            <CardTitle>{t("highlights")}</CardTitle>
+            <CardTitle>{t('highlights')}</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-3">
-            <HighlightRow icon={Utensils} label={t("topItems")} value={topItem?.itemName || "-"} sub={topItem ? `${topItem.quantity} sold · ${usd(topItem.revenueUsd)}` : "-"} />
-            <HighlightRow icon={Table2} label={t("revenueByTable")} value={topTable?.tableNumber || "-"} sub={topTable ? `${topTable.orders} ${t("orders")} · ${usd(topTable.revenueUsd)}` : "-"} />
-            <HighlightRow icon={CreditCard} label={t("payments")} value={`${paymentRate}% ${t("paid")}`} sub={`${paidPayments}/${totalPayments || 0} ${t("payments")}`} />
+            <HighlightRow
+              icon={Utensils}
+              label={t('topItems')}
+              value={topItem?.itemName || '-'}
+              sub={topItem ? `${topItem.quantity} sold · ${usd(topItem.revenueUsd)}` : '-'}
+            />
+            <HighlightRow
+              icon={Table2}
+              label={t('revenueByTable')}
+              value={topTable?.tableNumber || '-'}
+              sub={
+                topTable ? `${topTable.orders} ${t('orders')} · ${usd(topTable.revenueUsd)}` : '-'
+              }
+            />
+            <HighlightRow
+              icon={CreditCard}
+              label={t('payments')}
+              value={`${paymentRate}% ${t('paid')}`}
+              sub={`${paidPayments}/${totalPayments || 0} ${t('payments')}`}
+            />
           </CardContent>
         </Card>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-        <AnalyticsBarsCard title={t("topItems")} rows={analytics.topSellingItems} label="itemName" value="quantity" detailValue="revenueUsd" detailCurrency />
-        <AnalyticsBarsCard title={t("revenueByTable")} rows={analytics.revenueByTable} label="tableNumber" value="revenueUsd" currency detailValue="orders" />
-        <AnalyticsBarsCard title={t("paymentBreakdown")} rows={analytics.paymentBreakdown} label="paymentMethod" value="count" detailValue="amountUsd" detailCurrency />
+        <AnalyticsBarsCard
+          title={t('topItems')}
+          rows={analytics.topSellingItems}
+          label="itemName"
+          value="quantity"
+          detailValue="revenueUsd"
+          detailCurrency
+        />
+        <AnalyticsBarsCard
+          title={t('revenueByTable')}
+          rows={analytics.revenueByTable}
+          label="tableNumber"
+          value="revenueUsd"
+          currency
+          detailValue="orders"
+        />
+        <AnalyticsBarsCard
+          title={t('paymentBreakdown')}
+          rows={analytics.paymentBreakdown}
+          label="paymentMethod"
+          value="count"
+          detailValue="amountUsd"
+          detailCurrency
+        />
         <PeakHoursCard rows={analytics.peakHours} />
       </div>
     </div>
@@ -1595,7 +2251,7 @@ function AnalyticsView({ analytics, error, lastUpdatedAt, onRefresh }) {
 
 function TabButton({ active, icon: Icon, label, ...props }) {
   return (
-    <Button variant={active ? "default" : "outline"} {...props}>
+    <Button variant={active ? 'default' : 'outline'} {...props}>
       <Icon className="h-4 w-4" />
       {label}
     </Button>
@@ -1605,22 +2261,35 @@ function TabButton({ active, icon: Icon, label, ...props }) {
 function StatusBadge({ status }) {
   const { t } = useLanguage();
   const tone =
-    status === "PAID" || status === "COMPLETED" ? "primary" :
-    status === "RECEIVED" ? "info" :
-    status === "CANCELLED" || status === "REJECTED" || status === "EXPIRED" ? "danger" :
-    "secondary";
+    status === 'PAID' || status === 'COMPLETED'
+      ? 'primary'
+      : status === 'RECEIVED'
+        ? 'info'
+        : status === 'CANCELLED' || status === 'REJECTED' || status === 'EXPIRED'
+          ? 'danger'
+          : 'secondary';
   return <Badge tone={tone}>{dashboardStatusLabel(status, t)}</Badge>;
 }
 
 function PaymentBadge({ status }) {
   const { t } = useLanguage();
-  if (!status) return <Badge>{t("unpaid")}</Badge>;
+  if (!status) return <Badge>{t('unpaid')}</Badge>;
   const tone =
-    status === "PAID" ? "primary" :
-    status === "EXPIRED" ? "danger" :
-    status === "PENDING" ? "secondary" :
-    "muted";
+    status === 'PAID'
+      ? 'primary'
+      : status === 'EXPIRED'
+        ? 'danger'
+        : status === 'PENDING'
+          ? 'secondary'
+          : 'muted';
   return <Badge tone={tone}>{dashboardStatusLabel(status, t)}</Badge>;
+}
+
+function KitchenStatusBadge({ status }) {
+  const { t } = useLanguage();
+  const tone =
+    status === 'COMPLETED' ? 'primary' : status === 'ACCEPTED' ? 'info' : 'secondary';
+  return <Badge tone={tone}>{kitchenStatusLabel(status, t)}</Badge>;
 }
 
 function AttentionBadge({ minutes }) {
@@ -1628,7 +2297,7 @@ function AttentionBadge({ minutes }) {
   return (
     <Badge tone="accent" className="gap-1">
       <BellRing className="h-3 w-3" />
-      {t("alert")} {minutes}m
+      {t('alert')} {minutes}m
     </Badge>
   );
 }
@@ -1638,7 +2307,7 @@ function OrderMinutesBadge({ minutes }) {
   return (
     <Badge tone="muted" className="gap-1">
       <Clock className="h-3 w-3" />
-      {t("totalMinutes")} {minutes}m
+      {t('totalMinutes')} {minutes}m
     </Badge>
   );
 }
@@ -1648,31 +2317,40 @@ function PaidMinutesBadge({ minutes }) {
   return (
     <Badge tone="primary" className="gap-1">
       <Clock className="h-3 w-3" />
-      {t("paidMinutes")} {minutes}m
+      {t('paidMinutes')} {minutes}m
     </Badge>
   );
 }
 
 function dashboardStatusLabel(status, t) {
   const labels = {
-    PENDING_PAYMENT: t("awaitingPayment"),
-    PAID: t("paid"),
-    RECEIVED: t("receivedByStaff"),
-    PREPARING: t("preparing"),
-    READY: t("readyForPickup"),
-    COMPLETED: t("completed"),
-    REJECTED: t("rejected"),
-    CANCELLED: t("cancelled"),
-    EXPIRED: t("expired"),
-    PENDING: t("pending"),
-    UNPAID: t("unpaid")
+    PENDING_PAYMENT: t('awaitingPayment'),
+    PAID: t('paid'),
+    RECEIVED: t('receivedByStaff'),
+    PREPARING: t('preparing'),
+    READY: t('readyForPickup'),
+    COMPLETED: t('completed'),
+    REJECTED: t('rejected'),
+    CANCELLED: t('cancelled'),
+    EXPIRED: t('expired'),
+    PENDING: t('pending'),
+    UNPAID: t('unpaid'),
   };
-  return labels[status] || status || "-";
+  return labels[status] || status || '-';
+}
+
+function kitchenStatusLabel(status, t) {
+  const labels = {
+    PENDING: t('pending'),
+    ACCEPTED: t('acceptedPreparing'),
+    COMPLETED: t('complete'),
+  };
+  return labels[status] || status || '-';
 }
 
 function formatPromoValue(promo) {
-  if (promo.discountType === "PERCENT") {
-    const maxDiscount = promo.maxDiscountUsd == null ? "" : `, max ${usd(promo.maxDiscountUsd)}`;
+  if (promo.discountType === 'PERCENT') {
+    const maxDiscount = promo.maxDiscountUsd == null ? '' : `, max ${usd(promo.maxDiscountUsd)}`;
     return `${Number(promo.discountValue || 0).toFixed(2)}% off${maxDiscount}`;
   }
   return `${usd(promo.discountValue)} off`;
@@ -1680,29 +2358,27 @@ function formatPromoValue(promo) {
 
 function formatOrderDateTime(value) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
+  if (Number.isNaN(date.getTime())) return '-';
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
   const year = date.getFullYear();
   return `${day}/${month}/${year} ${formatClockTime(date)}`;
 }
 
 function formatClockTime(value) {
   const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  return [
-    date.getHours(),
-    date.getMinutes(),
-    date.getSeconds()
-  ].map((part) => String(part).padStart(2, "0")).join(":");
+  if (Number.isNaN(date.getTime())) return '-';
+  return [date.getHours(), date.getMinutes(), date.getSeconds()]
+    .map((part) => String(part).padStart(2, '0'))
+    .join(':');
 }
 
 function dateInputValue(value) {
   const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
+  if (Number.isNaN(date.getTime())) return '';
   const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
@@ -1711,11 +2387,14 @@ function isSameLocalDate(value, targetDate) {
 }
 
 function isPaidKitchenOrder(order) {
-  return ["PAID", "RECEIVED", "PREPARING"].includes(order?.status);
+  return ['PAID', 'RECEIVED', 'PREPARING'].includes(order?.status);
 }
 
 function isAlreadyPaidOrder(order) {
-  return ["PAID", "RECEIVED", "PREPARING", "READY", "COMPLETED"].includes(order?.status) || order?.paymentStatus === "PAID";
+  return (
+    ['PAID', 'RECEIVED', 'PREPARING', 'READY', 'COMPLETED'].includes(order?.status) ||
+    order?.paymentStatus === 'PAID'
+  );
 }
 
 function needsKitchenAttention(order, now = Date.now()) {
@@ -1745,24 +2424,133 @@ function waitingMs(order, now = Date.now()) {
   return Math.max(0, now - baseTime);
 }
 
-function formatApiError(error, fallback) {
-  const status = error?.status ? `${error.status} ` : "";
-  const message = error?.message && !error.message.startsWith("<") ? error.message : fallback;
-  return `${fallback}${status ? ` (${status.trim()})` : ""}${message && message !== fallback ? `: ${message}` : ""}`;
+function flattenKitchenItems(items = []) {
+  return items.flatMap((item) =>
+    Array.isArray(item.items) && item.items.length
+      ? item.items.map((entry) => ({
+          ...entry,
+          categoryName: entry.categoryName || item.categoryName,
+          imageUrl: entry.imageUrl || item.imageUrl,
+          itemName: entry.itemName || item.itemName,
+        }))
+      : [item]
+  );
 }
 
-function Metric({ icon: Icon, title, value, sub, tone = "primary" }) {
-  const toneClass = {
-    primary: "bg-primary/10 text-primary",
-    secondary: "bg-secondary/20 text-secondary-foreground",
-    accent: "bg-accent/10 text-accent",
-    muted: "bg-muted text-muted-foreground"
-  }[tone] || "bg-primary/10 text-primary";
+function groupKitchenCards(items = [], statusMap = {}) {
+  const groups = new Map();
+  for (const item of flattenKitchenItems(items)) {
+    const key = [item.categoryName || '', item.itemName || '', item.imageUrl || ''].join('::');
+    const status = itemStatusFromMap(item, statusMap);
+    const group =
+      groups.get(key) ||
+      {
+        key,
+        categoryName: item.categoryName,
+        itemName: item.itemName,
+        imageUrl: item.imageUrl,
+        totalQuantity: 0,
+        itemIds: [],
+        rows: [],
+      };
+    group.totalQuantity += Number(item.quantity || 0);
+    group.itemIds.push(item.id);
+    group.rows.push({
+      ...item,
+      kitchenStatus: status,
+    });
+    groups.set(key, group);
+  }
+
+  return [...groups.values()].map((group) => ({
+    ...group,
+    kitchenStatus: groupedKitchenStatus(group.rows),
+  }));
+}
+
+function itemStatusFromMap(item, statusMap = {}) {
+  return statusMap[item?.id] || 'PENDING';
+}
+
+function groupedKitchenStatus(items = []) {
+  if (items.length && items.every((item) => item.kitchenStatus === 'COMPLETED')) {
+    return 'COMPLETED';
+  }
+  if (items.some((item) => ['ACCEPTED', 'COMPLETED'].includes(item.kitchenStatus))) {
+    return 'ACCEPTED';
+  }
+  return 'PENDING';
+}
+
+function affectedKitchenOrderIds(items = [], itemIds = []) {
+  const ids = new Set(itemIds);
+  return [
+    ...new Set(
+      flattenKitchenItems(items)
+        .filter((item) => ids.has(item.id))
+        .map((item) => item.orderId)
+        .filter(Boolean)
+    ),
+  ];
+}
+
+function isKitchenOrderComplete(items = [], statusMap = {}, orderId) {
+  const orderItems = flattenKitchenItems(items).filter((item) => item.orderId === orderId);
+  return orderItems.length > 0 && orderItems.every((item) => itemStatusFromMap(item, statusMap) === 'COMPLETED');
+}
+
+function applyKitchenStatusToOrder(order, statusMap = {}) {
+  if (!order?.items) return order;
+  return {
+    ...order,
+    items: order.items.map((item) => ({
+      ...item,
+      kitchenStatus: itemStatusFromMap(item, statusMap),
+    })),
+  };
+}
+
+function kitchenItemMinutes(item, now = Date.now()) {
+  const baseValue = item?.paidAt || item?.createdAt;
+  const baseTime = new Date(baseValue).getTime();
+  if (!baseValue || Number.isNaN(baseTime)) return 0;
+  return Math.max(0, Math.floor((now - baseTime) / 60000));
+}
+
+function formatKitchenAddons(addons = []) {
+  return addons
+    .map((addon) => `${addon.addonName} x${addon.quantity}`)
+    .join(', ');
+}
+
+function canUpdateKitchenItem(order) {
+  return (
+    order?.paymentStatus === 'PAID' &&
+    !['COMPLETED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(order?.status)
+  );
+}
+
+function formatApiError(error, fallback) {
+  const status = error?.status ? `${error.status} ` : '';
+  const message = error?.message && !error.message.startsWith('<') ? error.message : fallback;
+  return `${fallback}${status ? ` (${status.trim()})` : ''}${message && message !== fallback ? `: ${message}` : ''}`;
+}
+
+function Metric({ icon: Icon, title, value, sub, tone = 'primary' }) {
+  const toneClass =
+    {
+      primary: 'bg-primary/10 text-primary',
+      secondary: 'bg-secondary/20 text-secondary-foreground',
+      accent: 'bg-accent/10 text-accent',
+      muted: 'bg-muted text-muted-foreground',
+    }[tone] || 'bg-primary/10 text-primary';
 
   return (
     <Card className="overflow-hidden">
       <CardContent className="flex items-start gap-3">
-        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${toneClass}`}>
+        <div
+          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${toneClass}`}
+        >
           <Icon className="h-5 w-5" />
         </div>
         <div className="min-w-0">
@@ -1792,24 +2580,34 @@ function HighlightRow({ icon: Icon, label, value, sub }) {
 
 function ItemDonutChart({ rows = [] }) {
   const { t } = useLanguage();
-  const totalQuantity = sumRows(rows, "quantity");
-  const segments = rows.slice(0, 6).map((row, index) => ({
-    label: row.itemName,
-    value: Number(row.quantity || 0),
-    revenueUsd: Number(row.revenueUsd || 0),
-    color: DONUT_COLORS[index % DONUT_COLORS.length]
-  })).filter((row) => row.value > 0);
+  const totalQuantity = sumRows(rows, 'quantity');
+  const segments = rows
+    .slice(0, 6)
+    .map((row, index) => ({
+      label: row.itemName,
+      value: Number(row.quantity || 0),
+      revenueUsd: Number(row.revenueUsd || 0),
+      color: DONUT_COLORS[index % DONUT_COLORS.length],
+    }))
+    .filter((row) => row.value > 0);
   let offset = 25;
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{t("ordersByItem")}</CardTitle>
+        <CardTitle>{t('ordersByItem')}</CardTitle>
       </CardHeader>
       <CardContent className="grid gap-4 sm:grid-cols-[180px_1fr] sm:items-center">
         <div className="relative mx-auto h-44 w-44">
           <svg viewBox="0 0 42 42" className="h-full w-full -rotate-90">
-            <circle cx="21" cy="21" r="15.915" fill="transparent" stroke="hsl(var(--muted))" strokeWidth="7" />
+            <circle
+              cx="21"
+              cy="21"
+              r="15.915"
+              fill="transparent"
+              stroke="hsl(var(--muted))"
+              strokeWidth="7"
+            />
             {segments.map((segment) => {
               const percent = totalQuantity ? (segment.value / totalQuantity) * 100 : 0;
               const circle = (
@@ -1831,21 +2629,29 @@ function ItemDonutChart({ rows = [] }) {
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
             <div className="text-2xl font-bold">{totalQuantity}</div>
-            <div className="text-xs text-muted-foreground">{t("itemsSold")}</div>
+            <div className="text-xs text-muted-foreground">{t('itemsSold')}</div>
           </div>
         </div>
         <div className="space-y-2">
           {segments.length === 0 ? (
             <p className="text-sm text-muted-foreground">-</p>
-          ) : segments.map((segment) => (
-            <div key={segment.label} className="flex items-center justify-between gap-3 rounded-md bg-muted/40 px-3 py-2 text-sm">
-              <span className="flex min-w-0 items-center gap-2">
-                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: segment.color }} />
-                <span className="truncate">{segment.label}</span>
-              </span>
-              <span className="shrink-0 font-semibold">{segment.value}</span>
-            </div>
-          ))}
+          ) : (
+            segments.map((segment) => (
+              <div
+                key={segment.label}
+                className="flex items-center justify-between gap-3 rounded-md bg-muted/40 px-3 py-2 text-sm"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: segment.color }}
+                  />
+                  <span className="truncate">{segment.label}</span>
+                </span>
+                <span className="shrink-0 font-semibold">{segment.value}</span>
+              </div>
+            ))
+          )}
         </div>
       </CardContent>
     </Card>
@@ -1857,14 +2663,14 @@ function PaidRevenueLineChart({ rows = [] }) {
   const points = rows.map((row) => ({
     day: formatShortDay(row.day),
     paidUsd: Number(row.paidUsd || 0),
-    payments: Number(row.payments || 0)
+    payments: Number(row.payments || 0),
   }));
   const totalPaid = points.reduce((sum, point) => sum + point.paidUsd, 0);
 
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between gap-3">
-        <CardTitle>{t("paidRevenueByDay")}</CardTitle>
+        <CardTitle>{t('paidRevenueByDay')}</CardTitle>
         <Badge tone="primary">{usd(totalPaid)}</Badge>
       </CardHeader>
       <CardContent>
@@ -1872,7 +2678,7 @@ function PaidRevenueLineChart({ rows = [] }) {
           data={points}
           xKey="day"
           yKey="paidUsd"
-          label={t("paidRevenueByDay")}
+          label={t('paidRevenueByDay')}
           color="hsl(var(--primary))"
         />
       </CardContent>
@@ -1881,8 +2687,19 @@ function PaidRevenueLineChart({ rows = [] }) {
 }
 
 function StatusFunnel({ rows = [] }) {
-  const orderedStatuses = ["PENDING_PAYMENT", "PAID", "RECEIVED", "PREPARING", "READY", "COMPLETED", "CANCELLED", "EXPIRED", "REJECTED"];
-  const sortedRows = [...rows].sort((a, b) => orderedStatuses.indexOf(a.status) - orderedStatuses.indexOf(b.status));
+  const orderedStatuses = [
+    'PENDING_PAYMENT',
+    'PAID',
+    'RECEIVED',
+    'PREPARING',
+    'COMPLETED',
+    'CANCELLED',
+    'EXPIRED',
+    'REJECTED',
+  ];
+  const sortedRows = [...rows].sort(
+    (a, b) => orderedStatuses.indexOf(a.status) - orderedStatuses.indexOf(b.status)
+  );
   const maxValue = Math.max(1, ...sortedRows.map((row) => Number(row.count || 0)));
 
   if (sortedRows.length === 0) {
@@ -1900,7 +2717,10 @@ function StatusFunnel({ rows = [] }) {
               <span className="text-lg font-semibold">{count}</span>
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(5, (count / maxValue) * 100)}%` }} />
+              <div
+                className="h-full rounded-full bg-primary"
+                style={{ width: `${Math.max(5, (count / maxValue) * 100)}%` }}
+              />
             </div>
           </div>
         );
@@ -1909,35 +2729,52 @@ function StatusFunnel({ rows = [] }) {
   );
 }
 
-function AnalyticsBarsCard({ title, rows = [], label, value, currency, detailValue, detailCurrency }) {
+function AnalyticsBarsCard({
+  title,
+  rows = [],
+  label,
+  value,
+  currency,
+  detailValue,
+  detailCurrency,
+}) {
   const { t } = useLanguage();
   const maxValue = Math.max(1, ...rows.map((row) => Number(row[value] || 0)));
   return (
     <Card>
-      <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
       <CardContent className="space-y-3">
         {rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">-</p>
-        ) : rows.map((row) => {
-          const amount = Number(row[value] || 0);
-          const detail = detailValue == null ? null : row[detailValue];
-          return (
-            <div key={row[label]} className="space-y-1.5">
-              <div className="flex justify-between gap-3 text-sm">
-                <span className="min-w-0 truncate">{row[label]}</span>
-                <span className="shrink-0 font-semibold">{currency ? usd(amount) : amount}</span>
-              </div>
-              {detailValue != null ? (
-                <div className="text-xs text-muted-foreground">
-                  {detailCurrency ? usd(detail) : `${detail} ${detailValue === "orders" ? t("orders") : ""}`}
+        ) : (
+          rows.map((row) => {
+            const amount = Number(row[value] || 0);
+            const detail = detailValue == null ? null : row[detailValue];
+            return (
+              <div key={row[label]} className="space-y-1.5">
+                <div className="flex justify-between gap-3 text-sm">
+                  <span className="min-w-0 truncate">{row[label]}</span>
+                  <span className="shrink-0 font-semibold">{currency ? usd(amount) : amount}</span>
                 </div>
-              ) : null}
-              <div className="h-2 overflow-hidden rounded-full bg-muted">
-                <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(4, (amount / maxValue) * 100)}%` }} />
+                {detailValue != null ? (
+                  <div className="text-xs text-muted-foreground">
+                    {detailCurrency
+                      ? usd(detail)
+                      : `${detail} ${detailValue === 'orders' ? t('orders') : ''}`}
+                  </div>
+                ) : null}
+                <div className="h-2 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary"
+                    style={{ width: `${Math.max(4, (amount / maxValue) * 100)}%` }}
+                  />
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
       </CardContent>
     </Card>
   );
@@ -1948,42 +2785,47 @@ function PeakHoursCard({ rows = [] }) {
   const maxValue = Math.max(1, ...rows.map((row) => Number(row.orders || 0)));
   return (
     <Card>
-      <CardHeader><CardTitle>{t("peakHours")}</CardTitle></CardHeader>
+      <CardHeader>
+        <CardTitle>{t('peakHours')}</CardTitle>
+      </CardHeader>
       <CardContent className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2">
         {rows.length === 0 ? (
           <p className="col-span-full text-sm text-muted-foreground">-</p>
-        ) : rows.map((row) => {
-          const orders = Number(row.orders || 0);
-          return (
-            <div key={row.hour} className="rounded-md border border-border bg-muted/30 p-3">
-              <div className="flex items-center justify-between gap-2 text-sm">
-                <span className="font-semibold">{formatHour(row.hour)}</span>
-                <span className="text-muted-foreground">{orders}</span>
+        ) : (
+          rows.map((row) => {
+            const orders = Number(row.orders || 0);
+            return (
+              <div key={row.hour} className="rounded-md border border-border bg-muted/30 p-3">
+                <div className="flex items-center justify-between gap-2 text-sm">
+                  <span className="font-semibold">{formatHour(row.hour)}</span>
+                  <span className="text-muted-foreground">{orders}</span>
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-background">
+                  <div
+                    className="h-full rounded-full bg-secondary"
+                    style={{ width: `${Math.max(6, (orders / maxValue) * 100)}%` }}
+                  />
+                </div>
               </div>
-              <div className="mt-2 h-2 overflow-hidden rounded-full bg-background">
-                <div className="h-full rounded-full bg-secondary" style={{ width: `${Math.max(6, (orders / maxValue) * 100)}%` }} />
-              </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
       </CardContent>
     </Card>
   );
 }
 
 function sumRows(rows = [], key, predicate = () => true) {
-  return rows
-    .filter(predicate)
-    .reduce((sum, row) => sum + Number(row[key] || 0), 0);
+  return rows.filter(predicate).reduce((sum, row) => sum + Number(row[key] || 0), 0);
 }
 
 function formatHour(hour) {
   const normalized = Number(hour || 0);
-  return `${String(normalized).padStart(2, "0")}:00`;
+  return `${String(normalized).padStart(2, '0')}:00`;
 }
 
 function formatShortDay(value) {
-  if (!value) return "-";
+  if (!value) return '-';
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return String(value);
   return `${date.getMonth() + 1}/${date.getDate()}`;
@@ -2008,9 +2850,9 @@ function upsertById(items, item) {
 function downloadSvg(tableId, filename) {
   const svg = document.querySelector(`[data-qr="${tableId}"] svg`);
   if (!svg) return;
-  const blob = new Blob([new XMLSerializer().serializeToString(svg)], { type: "image/svg+xml" });
+  const blob = new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' });
   const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
+  const link = document.createElement('a');
   link.href = url;
   link.download = filename;
   link.click();
@@ -2018,11 +2860,11 @@ function downloadSvg(tableId, filename) {
 }
 
 function displayImageUrl(url) {
-  if (!url) return "/logo.png";
-  return String(url).replace(/^http:\/\/minio:9000/i, "http://localhost:9000");
+  if (!url) return '/logo.png';
+  return String(url).replace(/^http:\/\/minio:9000/i, 'http://localhost:9000');
 }
 
 function replaceBrokenImage(event) {
-  if (event.currentTarget.src.endsWith("/logo.png")) return;
-  event.currentTarget.src = "/logo.png";
+  if (event.currentTarget.src.endsWith('/logo.png')) return;
+  event.currentTarget.src = '/logo.png';
 }

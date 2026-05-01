@@ -1,54 +1,82 @@
-"use client";
+'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { QRCodeSVG } from "qrcode.react";
-import { gooeyToast } from "goey-toast";
-import { AlertCircle, BadgePercent, CheckCircle2, ChevronRight, ChevronUp, Clock, Download, Minus, Plus, Search, ShoppingBag, Trash2, Utensils, X, Zap } from "lucide-react";
-import { api, API_BASE } from "@/lib/api";
-import { goeyToastOptions } from "@/lib/goey-toast-options";
-import { cn, displayUsd, khr, tags, usd } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input, Select, Textarea } from "@/components/ui/input";
-import { LanguageToggle, useLanguage } from "@/components/language-provider";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { LanguageToggle, useLanguage } from '@/components/language-provider';
+import { ThemeToggle } from '@/components/theme-toggle';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Input, Select, Textarea } from '@/components/ui/input';
+import { API_BASE, api } from '@/lib/api';
+import { AbaBankLogo, AcledaBankLogo, ChipMongBankLogo } from '@/lib/bank-logo';
+import { goeyToastOptions } from '@/lib/goey-toast-options';
+import { cn, displayUsd, khr, tags, usd } from '@/lib/utils';
+import { gooeyToast } from 'goey-toast';
+import {
+  AlertCircle,
+  BadgePercent,
+  CheckCircle2,
+  ChevronRight,
+  ChevronUp,
+  Clock,
+  Download,
+  Minus,
+  Plus,
+  QrCode,
+  Search,
+  ShoppingBag,
+  Smartphone,
+  Trash2,
+  Utensils,
+  X,
+  Zap,
+} from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const PRICE_FILTERS = [
-  { value: "all", label: "All" },
-  { value: "under_3", label: "Under $3" },
-  { value: "3_5", label: "$3–$5" },
-  { value: "5_10", label: "$5–$10" },
-  { value: "10_plus", label: "$10+" },
+  { value: 'all', label: 'All' },
+  { value: 'under_3', label: 'Under $3' },
+  { value: '3_5', label: '$3–$5' },
+  { value: '5_10', label: '$5–$10' },
+  { value: '10_plus', label: '$10+' },
 ];
 
 const CUSTOMER_STORAGE_TTL_MS = 12 * 60 * 60 * 1000;
 const MIN_CART_TOTAL_USD = 0.01;
 const CUSTOMER_ALERT_AFTER_MS = 10 * 60 * 1000;
+const PAYMENT_APPS = [
+  { id: 'aba', name: 'ABA Bank', deepLink: 'aba://pay', Logo: AbaBankLogo },
+  { id: 'acleda', name: 'ACLEDA', deepLink: 'acleda://', Logo: AcledaBankLogo },
+  { id: 'chipmong', name: 'Chip Mong', deepLink: 'chipmong://', Logo: ChipMongBankLogo },
+];
 
 export default function CustomerOrderingApp({ tableNumber }) {
   const { t } = useLanguage();
   const [table, setTable] = useState(null);
   const [menu, setMenu] = useState({ categories: [], items: [], addons: [], options: [] });
-  const [categoryId, setCategoryId] = useState("");
-  const [priceFilter, setPriceFilter] = useState("all");
-  const [query, setQuery] = useState("");
+  const [categoryId, setCategoryId] = useState('');
+  const [priceFilter, setPriceFilter] = useState('all');
+  const [query, setQuery] = useState('');
   const [cart, setCart] = useState([]);
   const [activeItem, setActiveItem] = useState(null);
-  const [promoCode, setPromoCode] = useState("");
-  const [promoState, setPromoState] = useState({ status: "idle", message: "", detail: null, showDetail: false });
+  const [promoCode, setPromoCode] = useState('');
+  const [promoState, setPromoState] = useState({
+    status: 'idle',
+    message: '',
+    detail: null,
+    showDetail: false,
+  });
   const [cartOpen, setCartOpen] = useState(false);
 
   const [orders, setOrders] = useState([]);
   const [payments, setPayments] = useState({});
   const [deletedOrderIds, setDeletedOrderIds] = useState([]);
   const [alertedOrderIds, setAlertedOrderIds] = useState([]);
-  const [loadedStorageScope, setLoadedStorageScope] = useState("");
+  const [loadedStorageScope, setLoadedStorageScope] = useState('');
   const [openPaymentOrderId, setOpenPaymentOrderId] = useState(null);
 
   const [now, setNow] = useState(Date.now());
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [alertingOrderId, setAlertingOrderId] = useState(null);
 
@@ -59,19 +87,22 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const lastOrderStatusRef = useRef({});
   const welcomeToastShown = useRef(false);
 
-  const storageKeys = useMemo(() => ({
-    cart: customerStorageKey(tableNumber, "cart"),
-    orders: customerStorageKey(tableNumber, "orders"),
-    payments: customerStorageKey(tableNumber, "payments"),
-    deletedOrders: customerStorageKey(tableNumber, "deleted-orders"),
-    alertedOrders: customerStorageKey(tableNumber, "alerted-orders"),
-  }), [tableNumber]);
+  const storageKeys = useMemo(
+    () => ({
+      cart: customerStorageKey(tableNumber, 'cart'),
+      orders: customerStorageKey(tableNumber, 'orders'),
+      payments: customerStorageKey(tableNumber, 'payments'),
+      deletedOrders: customerStorageKey(tableNumber, 'deleted-orders'),
+      alertedOrders: customerStorageKey(tableNumber, 'alerted-orders'),
+    }),
+    [tableNumber]
+  );
 
   const unlockCustomerAlert = useCallback(() => {
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       customerAudioRef.current = customerAudioRef.current || new AudioContext();
-      if (customerAudioRef.current.state === "suspended") {
+      if (customerAudioRef.current.state === 'suspended') {
         customerAudioRef.current.resume().catch(() => {});
       }
     } catch {
@@ -93,7 +124,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
         [0, 0.2, 0.4].forEach((offset, index) => {
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
-          osc.type = "sine";
+          osc.type = 'sine';
           osc.frequency.setValueAtTime(index % 2 === 0 ? 880 : 1174, nowTime + offset);
           gain.gain.setValueAtTime(0.0001, nowTime + offset);
           gain.gain.exponentialRampToValueAtTime(0.13, nowTime + offset + 0.02);
@@ -104,8 +135,11 @@ export default function CustomerOrderingApp({ tableNumber }) {
           osc.stop(nowTime + offset + 0.18);
         });
       };
-      if (ctx.state === "suspended") {
-        ctx.resume().then(play).catch(() => {});
+      if (ctx.state === 'suspended') {
+        ctx
+          .resume()
+          .then(play)
+          .catch(() => {});
         return;
       }
       play();
@@ -114,53 +148,68 @@ export default function CustomerOrderingApp({ tableNumber }) {
     }
   }, []);
 
-  const showToast = useCallback((text, variant = "success") => {
+  const showToast = useCallback((text, variant = 'success') => {
     const options = goeyToastOptions();
-    if (variant === "error") {
+    if (variant === 'error') {
       gooeyToast.error(text, options);
       return;
     }
     gooeyToast.success(text, options);
   }, []);
 
-  const showAddedToCartToast = useCallback((item) => {
-    const toastId = "customer-cart-added";
-    gooeyToast.success(t("addedToCartTitle"), goeyToastOptions({
-      id: toastId,
-      description: `${item.name} · ${t("quantity")}: ${item.quantity}`,
-      icon: <ShoppingBag className="h-4 w-4" />,
-      action: {
-        label: t("viewCart"),
-        onClick: () => {
-          setCartOpen(true);
-          gooeyToast.dismiss(toastId);
-        },
-      },
-    }));
-  }, [t]);
+  const showAddedToCartToast = useCallback(
+    (item) => {
+      const toastId = 'customer-cart-added';
+      gooeyToast.success(
+        t('addedToCartTitle'),
+        goeyToastOptions({
+          id: toastId,
+          description: `${item.name} · ${t('quantity')}: ${item.quantity}`,
+          icon: <ShoppingBag className="h-4 w-4" />,
+          action: {
+            label: t('viewCart'),
+            onClick: () => {
+              setCartOpen(true);
+              gooeyToast.dismiss(toastId);
+            },
+          },
+        })
+      );
+    },
+    [t]
+  );
 
-  const notifyPaymentReceived = useCallback((orderId) => {
-    const text = t("paymentReceived");
-    setMessage(text);
-    if (paidToastShown.current[orderId]) return;
-    paidToastShown.current[orderId] = true;
-    playCustomerAlert();
-    showToast(text);
-  }, [playCustomerAlert, showToast, t]);
+  const notifyPaymentReceived = useCallback(
+    (orderId) => {
+      const text = t('paymentReceived');
+      setMessage(text);
+      if (paidToastShown.current[orderId]) return;
+      paidToastShown.current[orderId] = true;
+      playCustomerAlert();
+      showToast(text);
+    },
+    [playCustomerAlert, showToast, t]
+  );
 
-  const notifyOrderStatusChanged = useCallback((order) => {
-    const statusText = customerStatusLabel(order.status, t);
-    setMessage(`${t("orderStatusUpdated")}: ${statusText}`);
-    playCustomerAlert();
-    gooeyToast.info(t("orderStatusUpdated"), goeyToastOptions({
-      id: `customer-order-status-${order.id || order.orderNumber || "latest"}`,
-      description: `${order.orderNumber || t("order")} · ${statusText}`,
-      icon: <Clock className="h-4 w-4" />,
-    }));
-  }, [playCustomerAlert, t]);
+  const notifyOrderStatusChanged = useCallback(
+    (order) => {
+      const statusText = customerStatusLabel(order.status, t);
+      setMessage(`${t('orderStatusUpdated')}: ${statusText}`);
+      playCustomerAlert();
+      gooeyToast.info(
+        t('orderStatusUpdated'),
+        goeyToastOptions({
+          id: `customer-order-status-${order.id || order.orderNumber || 'latest'}`,
+          description: `${order.orderNumber || t('order')} · ${statusText}`,
+          icon: <Clock className="h-4 w-4" />,
+        })
+      );
+    },
+    [playCustomerAlert, t]
+  );
 
   useEffect(() => {
-    setLoadedStorageScope("");
+    setLoadedStorageScope('');
     setCart(readCustomerStorage(storageKeys.cart, []));
     setOrders(readCustomerStorage(storageKeys.orders, []));
     setPayments(readCustomerStorage(storageKeys.payments, {}));
@@ -170,7 +219,13 @@ export default function CustomerOrderingApp({ tableNumber }) {
     lastOrderStatusRef.current = {};
     setOpenPaymentOrderId(null);
     setLoadedStorageScope(storageKeys.cart);
-  }, [storageKeys.alertedOrders, storageKeys.cart, storageKeys.deletedOrders, storageKeys.orders, storageKeys.payments]);
+  }, [
+    storageKeys.alertedOrders,
+    storageKeys.cart,
+    storageKeys.deletedOrders,
+    storageKeys.orders,
+    storageKeys.payments,
+  ]);
 
   useEffect(() => {
     orders.forEach((order) => {
@@ -187,7 +242,19 @@ export default function CustomerOrderingApp({ tableNumber }) {
     writeCustomerStorage(storageKeys.payments, payments);
     writeCustomerStorage(storageKeys.deletedOrders, deletedOrderIds);
     writeCustomerStorage(storageKeys.alertedOrders, alertedOrderIds);
-  }, [alertedOrderIds, cart, deletedOrderIds, loadedStorageScope, orders, payments, storageKeys.alertedOrders, storageKeys.cart, storageKeys.deletedOrders, storageKeys.orders, storageKeys.payments]);
+  }, [
+    alertedOrderIds,
+    cart,
+    deletedOrderIds,
+    loadedStorageScope,
+    orders,
+    payments,
+    storageKeys.alertedOrders,
+    storageKeys.cart,
+    storageKeys.deletedOrders,
+    storageKeys.orders,
+    storageKeys.payments,
+  ]);
 
   useEffect(() => {
     async function load() {
@@ -196,7 +263,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
       try {
         const [tableData, menuData] = await Promise.all([
           api(`/api/customer/tables/${tableNumber}`),
-          api("/api/customer/menu"),
+          api('/api/customer/menu'),
         ]);
         setTable(tableData);
         setMenu(menuData);
@@ -214,38 +281,55 @@ export default function CustomerOrderingApp({ tableNumber }) {
     const tableLabel = customerTableLabel(table, tableNumber, t);
     if (!tableLabel) return;
     welcomeToastShown.current = true;
-    gooeyToast.info(t("welcomeTitle"), goeyToastOptions({
-      id: `customer-welcome-${tableNumber}`,
-      description: `${t("youAreAtTable")} ${tableLabel}`,
-      icon: <Utensils className="h-4 w-4" />,
-    }));
+    gooeyToast.info(
+      t('welcomeTitle'),
+      goeyToastOptions({
+        id: `customer-welcome-${tableNumber}`,
+        description: `${t('youAreAtTable')} ${tableLabel}`,
+        icon: <Utensils className="h-4 w-4" />,
+      })
+    );
   }, [loading, table, tableNumber, t]);
 
   useEffect(() => {
-    const pending = Object.entries(payments).filter(([, p]) => p && p.status === "PENDING");
+    const pending = Object.entries(payments).filter(([, p]) => p && p.status === 'PENDING');
     if (pending.length === 0) return;
     const timer = setInterval(async () => {
       for (const [orderId, payment] of pending) {
         if (pollingInFlight.current[payment.id]) continue;
         pollingInFlight.current[payment.id] = true;
         try {
-          const verified = await api(`/api/payments/${payment.id}/verify`, { method: "POST" });
+          const verified = await api(`/api/payments/${payment.id}/verify`, { method: 'POST' });
           setPayments((prev) => ({ ...prev, [orderId]: verified }));
-          if (verified.status === "PAID") {
-            lastOrderStatusRef.current[orderId] = "RECEIVED";
-            setOrders((prev) => prev.map((order) => order.id === orderId ? { ...order, status: "RECEIVED", paidAt: verified.paidAt || new Date().toISOString() } : order));
+          if (verified.status === 'PAID') {
+            lastOrderStatusRef.current[orderId] = 'RECEIVED';
+            setOrders((prev) =>
+              prev.map((order) =>
+                order.id === orderId
+                  ? {
+                      ...order,
+                      status: 'RECEIVED',
+                      paidAt: verified.paidAt || new Date().toISOString(),
+                    }
+                  : order
+              )
+            );
             notifyPaymentReceived(orderId);
           }
-        } catch {}
-        finally { pollingInFlight.current[payment.id] = false; }
+        } catch {
+        } finally {
+          pollingInFlight.current[payment.id] = false;
+        }
       }
     }, 5000);
     return () => clearInterval(timer);
   }, [payments, notifyPaymentReceived]);
 
   useEffect(() => {
-    const hasPending = Object.values(payments).some((p) => p && p.status === "PENDING");
-    const hasPaidKitchenOrder = orders.some((order) => canRequestStaffAlert(order, Date.now(), { ignoreAge: true }));
+    const hasPending = Object.values(payments).some((p) => p && p.status === 'PENDING');
+    const hasPaidKitchenOrder = orders.some((order) =>
+      canRequestStaffAlert(order, Date.now(), { ignoreAge: true })
+    );
     if (!hasPending && !hasPaidKitchenOrder) return;
     const timer = setInterval(() => setNow(Date.now()), hasPending ? 1000 : 30000);
     return () => clearInterval(timer);
@@ -260,15 +344,15 @@ export default function CustomerOrderingApp({ tableNumber }) {
     });
   }, [menu.items, categoryId, priceFilter, query]);
 
-  const groupedAddons = useMemo(() => groupBy(menu.addons, "menuItemId"), [menu.addons]);
-  const groupedOptions = useMemo(() => groupBy(menu.options, "menuItemId"), [menu.options]);
+  const groupedAddons = useMemo(() => groupBy(menu.addons, 'menuItemId'), [menu.addons]);
+  const groupedOptions = useMemo(() => groupBy(menu.options, 'menuItemId'), [menu.options]);
 
   const totals = useMemo(() => {
     const subtotalUsd = cart.reduce((sum, item) => sum + Number(item.lineUsd || 0), 0);
-    const rawDiscountUsd = promoState.status === "valid"
-      ? promoDiscountForSubtotal(promoState.detail, subtotalUsd)
-      : 0;
-    const maxDiscountUsd = cart.length > 0 ? Math.max(0, subtotalUsd - MIN_CART_TOTAL_USD) : subtotalUsd;
+    const rawDiscountUsd =
+      promoState.status === 'valid' ? promoDiscountForSubtotal(promoState.detail, subtotalUsd) : 0;
+    const maxDiscountUsd =
+      cart.length > 0 ? Math.max(0, subtotalUsd - MIN_CART_TOTAL_USD) : subtotalUsd;
     const discountUsd = Math.min(rawDiscountUsd, maxDiscountUsd);
     const totalUsd = Math.max(0, subtotalUsd - discountUsd);
     const billableTotalUsd = cart.length > 0 ? Math.max(MIN_CART_TOTAL_USD, totalUsd) : 0;
@@ -292,8 +376,10 @@ export default function CustomerOrderingApp({ tableNumber }) {
           const updated = await api(`/api/customer/orders/${order.id}`);
           if (cancelled) return;
           applyCustomerOrderUpdate(updated, { notify: true });
-        } catch {
-          // Status refresh is best-effort; the next poll will retry.
+        } catch (error) {
+          if (error.status === 404) {
+            deleteLocalOrder(order.id);
+          }
         }
       }
     }
@@ -345,33 +431,59 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
   function handlePromoCodeChange(value) {
     setPromoCode(value.toUpperCase());
-    setPromoState({ status: "idle", message: "", detail: null, showDetail: false });
+    setPromoState({ status: 'idle', message: '', detail: null, showDetail: false });
   }
 
   async function applyPromoCode() {
     const code = promoCode.trim();
     if (!code) {
-      setPromoState({ status: "invalid", message: t("enterPromoCode"), detail: null, showDetail: false });
+      setPromoState({
+        status: 'invalid',
+        message: t('enterPromoCode'),
+        detail: null,
+        showDetail: false,
+      });
       return;
     }
     if (!cart.length) {
-      setPromoState({ status: "invalid", message: t("promoBeforeItems"), detail: null, showDetail: false });
+      setPromoState({
+        status: 'invalid',
+        message: t('promoBeforeItems'),
+        detail: null,
+        showDetail: false,
+      });
       return;
     }
 
-    setPromoState((current) => ({ ...current, status: "checking", message: t("checkingPromoCode") }));
+    setPromoState((current) => ({
+      ...current,
+      status: 'checking',
+      message: t('checkingPromoCode'),
+    }));
     try {
-      const detail = await api(`/api/customer/promos/${encodeURIComponent(code)}/validate?subtotalUsd=${totals.subtotalUsd.toFixed(2)}`);
+      const detail = await api(
+        `/api/customer/promos/${encodeURIComponent(code)}/validate?subtotalUsd=${totals.subtotalUsd.toFixed(2)}`
+      );
       if (detail.valid) {
-        setPromoState({ status: "valid", message: t("promoApplied"), detail, showDetail: false });
-        showToast(t("promoApplied"));
+        setPromoState({ status: 'valid', message: t('promoApplied'), detail, showDetail: false });
+        showToast(t('promoApplied'));
       } else {
-        setPromoState({ status: "invalid", message: t("invalidPromo"), detail: null, showDetail: false });
-        showToast(t("invalidPromo"), "error");
+        setPromoState({
+          status: 'invalid',
+          message: t('invalidPromo'),
+          detail: null,
+          showDetail: false,
+        });
+        showToast(t('invalidPromo'), 'error');
       }
     } catch (error) {
-      setPromoState({ status: "invalid", message: error.message || t("invalidPromo"), detail: null, showDetail: false });
-      showToast(error.message || t("invalidPromo"), "error");
+      setPromoState({
+        status: 'invalid',
+        message: error.message || t('invalidPromo'),
+        detail: null,
+        showDetail: false,
+      });
+      showToast(error.message || t('invalidPromo'), 'error');
     }
   }
 
@@ -385,14 +497,16 @@ export default function CustomerOrderingApp({ tableNumber }) {
         if (item.cartId !== cartId) return item;
         const quantity = item.quantity + delta;
         if (quantity < 1) return [];
-        return [{ ...item, quantity, lineUsd: item.unitUsd * quantity + item.addonTotalUsd * quantity }];
+        return [
+          { ...item, quantity, lineUsd: item.unitUsd * quantity + item.addonTotalUsd * quantity },
+        ];
       })
     );
   }
 
   async function submitOrder() {
     if (!cart.length || submitting || totals.totalUsd <= 0) return;
-    setMessage("");
+    setMessage('');
     unlockCustomerAlert();
     setSubmitting(true);
     try {
@@ -409,38 +523,45 @@ export default function CustomerOrderingApp({ tableNumber }) {
           specialInstructions: item.specialInstructions,
         })),
       };
-      const created = await api("/api/customer/orders", { method: "POST", body: JSON.stringify(payload) });
+      const created = await api('/api/customer/orders', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
       lastOrderStatusRef.current[created.id] = created.status;
       setOrders((prev) => upsertById(prev, created));
       setDeletedOrderIds((prev) => prev.filter((id) => id !== created.id));
       setCart([]);
-      setPromoCode("");
-      setPromoState({ status: "idle", message: "", detail: null, showDetail: false });
+      setPromoCode('');
+      setPromoState({ status: 'idle', message: '', detail: null, showDetail: false });
       setCartOpen(false);
       try {
-        const createdPayment = await api(`/api/payments/orders/${created.id}/khqr`, { method: "POST" });
+        const createdPayment = await api(`/api/payments/orders/${created.id}/khqr`, {
+          method: 'POST',
+        });
         setPayments((prev) => ({ ...prev, [created.id]: createdPayment }));
         setOpenPaymentOrderId(created.id);
-        setMessage(t("orderPlacedQr"));
+        setMessage(t('orderPlacedChooseBank'));
       } catch {
-        setMessage(t("orderPlacedTapPay"));
+        setMessage(t('orderPlacedTapPay'));
       }
     } catch (error) {
-      const customerMessage = isPromoCodeError(error, promoCode) ? t("invalidPromo") : error.message;
+      const customerMessage = isPromoCodeError(error, promoCode)
+        ? t('invalidPromo')
+        : error.message;
       setMessage(customerMessage);
-      showToast(customerMessage, "error");
+      showToast(customerMessage, 'error');
     } finally {
       setSubmitting(false);
     }
   }
 
   async function openPaymentFor(orderId) {
-    setMessage("");
+    setMessage('');
     unlockCustomerAlert();
     const payment = payments[orderId];
     if (!payment) {
       try {
-        const created = await api(`/api/payments/orders/${orderId}/khqr`, { method: "POST" });
+        const created = await api(`/api/payments/orders/${orderId}/khqr`, { method: 'POST' });
         setPayments((prev) => ({ ...prev, [orderId]: created }));
       } catch (error) {
         setMessage(error.message);
@@ -454,11 +575,21 @@ export default function CustomerOrderingApp({ tableNumber }) {
     const payment = payments[orderId];
     if (!payment) return;
     try {
-      const verified = await api(`/api/payments/${payment.id}/verify`, { method: "POST" });
+      const verified = await api(`/api/payments/${payment.id}/verify`, { method: 'POST' });
       setPayments((prev) => ({ ...prev, [orderId]: verified }));
-      if (verified.status === "PAID") {
-        lastOrderStatusRef.current[orderId] = "RECEIVED";
-        setOrders((prev) => prev.map((order) => order.id === orderId ? { ...order, status: "RECEIVED", paidAt: verified.paidAt || new Date().toISOString() } : order));
+      if (verified.status === 'PAID') {
+        lastOrderStatusRef.current[orderId] = 'RECEIVED';
+        setOrders((prev) =>
+          prev.map((order) =>
+            order.id === orderId
+              ? {
+                  ...order,
+                  status: 'RECEIVED',
+                  paidAt: verified.paidAt || new Date().toISOString(),
+                }
+              : order
+          )
+        );
         notifyPaymentReceived(orderId);
       }
     } catch {}
@@ -466,24 +597,24 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
   async function cancelPaymentFor(orderId) {
     if (!orderId) return;
-    setMessage("");
+    setMessage('');
     try {
-      const cancelled = await api(`/api/customer/orders/${orderId}/cancel`, { method: "PATCH" });
+      const cancelled = await api(`/api/customer/orders/${orderId}/cancel`, { method: 'PATCH' });
       lastOrderStatusRef.current[orderId] = cancelled.status;
       setOrders((prev) => upsertById(prev, cancelled));
       setPayments((prev) => {
         const current = prev[orderId];
-        return current ? { ...prev, [orderId]: { ...current, status: "FAILED" } } : prev;
+        return current ? { ...prev, [orderId]: { ...current, status: 'FAILED' } } : prev;
       });
-      setOpenPaymentOrderId((current) => current === orderId ? null : current);
-      showToast(t("paymentCancelled"));
+      setOpenPaymentOrderId((current) => (current === orderId ? null : current));
+      showToast(t('paymentCancelled'));
     } catch (error) {
-      showToast(error.message || t("paymentCancelFailed"), "error");
+      showToast(error.message || t('paymentCancelFailed'), 'error');
     }
   }
 
   function deleteLocalOrder(orderId) {
-    setDeletedOrderIds((prev) => prev.includes(orderId) ? prev : [...prev, orderId]);
+    setDeletedOrderIds((prev) => (prev.includes(orderId) ? prev : [...prev, orderId]));
     setAlertedOrderIds((prev) => prev.filter((id) => id !== orderId));
     delete lastOrderStatusRef.current[orderId];
     setPayments((prev) => {
@@ -492,22 +623,22 @@ export default function CustomerOrderingApp({ tableNumber }) {
       delete next[orderId];
       return next;
     });
-    setOpenPaymentOrderId((current) => current === orderId ? null : current);
-    showToast(t("orderDeleted"));
+    setOpenPaymentOrderId((current) => (current === orderId ? null : current));
+    showToast(t('orderDeleted'));
   }
 
   async function alertStaffFor(orderId) {
     if (!orderId) return;
     const order = orders.find((entry) => entry.id === orderId);
     if (!canRequestStaffAlert(order, now) || alertedOrderIds.includes(orderId)) return;
-    setMessage("");
+    setMessage('');
     setAlertingOrderId(orderId);
     try {
-      await api(`/api/customer/orders/${orderId}/alert`, { method: "POST" });
-      setAlertedOrderIds((prev) => prev.includes(orderId) ? prev : [...prev, orderId]);
-      showToast(t("customerAlertSent"));
+      await api(`/api/customer/orders/${orderId}/alert`, { method: 'POST' });
+      setAlertedOrderIds((prev) => (prev.includes(orderId) ? prev : [...prev, orderId]));
+      showToast(t('customerAlertSent'));
     } catch (error) {
-      showToast(error.message || t("customerAlertFailed"), "error");
+      showToast(error.message || t('customerAlertFailed'), 'error');
     } finally {
       setAlertingOrderId(null);
     }
@@ -519,14 +650,17 @@ export default function CustomerOrderingApp({ tableNumber }) {
         <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
           <Utensils className="h-6 w-6 animate-pulse text-primary" />
         </div>
-        <p className="text-sm font-medium text-muted-foreground">{t("loadingMenu")}</p>
+        <p className="text-sm font-medium text-muted-foreground">{t('loadingMenu')}</p>
       </div>
     );
   }
 
-  const openModalOrder = openPaymentOrderId ? visibleOrders.find((o) => o.id === openPaymentOrderId) : null;
+  const openModalOrder = openPaymentOrderId
+    ? visibleOrders.find((o) => o.id === openPaymentOrderId)
+    : null;
   const openModalPayment = openPaymentOrderId ? payments[openPaymentOrderId] : null;
-  const isPaymentMessage = message === t("paymentReceived") || message.startsWith("Payment received");
+  const isPaymentMessage =
+    message === t('paymentReceived') || message.startsWith('Payment received');
   const tableLabel = customerTableLabel(table, tableNumber, t);
 
   return (
@@ -566,15 +700,19 @@ export default function CustomerOrderingApp({ tableNumber }) {
         <section className="min-w-0">
           {/* Status banner */}
           {message ? (
-            <div className={cn(
-              "mb-5 flex items-start gap-3 rounded-xl border px-4 py-3 text-sm",
-              isPaymentMessage
-                ? "border-primary/30 bg-primary/8 text-primary"
-                : "border-border bg-muted/50"
-            )}>
-              {isPaymentMessage
-                ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-                : <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
+            <div
+              className={cn(
+                'mb-5 flex items-start gap-3 rounded-xl border px-4 py-3 text-sm',
+                isPaymentMessage
+                  ? 'border-primary/30 bg-primary/8 text-primary'
+                  : 'border-border bg-muted/50'
+              )}
+            >
+              {isPaymentMessage ? (
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+              ) : (
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
               <span>{message}</span>
             </div>
           ) : null}
@@ -588,12 +726,12 @@ export default function CustomerOrderingApp({ tableNumber }) {
                 <Input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder={t("searchDishes")}
+                  placeholder={t('searchDishes')}
                   className="h-10 rounded-xl pl-9 text-sm"
                 />
                 {query ? (
                   <button
-                    onClick={() => setQuery("")}
+                    onClick={() => setQuery('')}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   >
                     <X className="h-3.5 w-3.5" />
@@ -605,9 +743,11 @@ export default function CustomerOrderingApp({ tableNumber }) {
                 onChange={(e) => setCategoryId(e.target.value)}
                 className="h-10 rounded-xl text-sm"
               >
-                <option value="">{t("allCategories")}</option>
+                <option value="">{t('allCategories')}</option>
                 {menu.categories.map((cat) => (
-                  <option key={cat.id} value={cat.id}>{cat.name}</option>
+                  <option key={cat.id} value={cat.id}>
+                    {cat.name}
+                  </option>
                 ))}
               </Select>
             </div>
@@ -619,10 +759,10 @@ export default function CustomerOrderingApp({ tableNumber }) {
                   key={opt.value}
                   onClick={() => setPriceFilter(opt.value)}
                   className={cn(
-                    "inline-flex shrink-0 cursor-pointer items-center rounded-full border px-3.5 py-1.5 text-xs font-medium transition-all duration-150",
+                    'inline-flex shrink-0 cursor-pointer items-center rounded-full border px-3.5 py-1.5 text-xs font-medium transition-all duration-150',
                     priceFilter === opt.value
-                      ? "border-primary bg-primary text-primary-foreground shadow-sm"
-                      : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                      ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                      : 'border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground'
                   )}
                 >
                   {opt.label}
@@ -634,28 +774,28 @@ export default function CustomerOrderingApp({ tableNumber }) {
           {/* Result count */}
           {filteredItems.length > 0 ? (
             <p className="mb-3 text-xs font-medium text-muted-foreground">
-              {filteredItems.length} {filteredItems.length === 1 ? "dish" : "dishes"}
+              {filteredItems.length} {filteredItems.length === 1 ? 'dish' : 'dishes'}
             </p>
           ) : null}
 
           {/* ── Menu grid ────────────────────────────────────── */}
           <div className="grid auto-rows-fr grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-3">
             {filteredItems.map((item) => (
-              <MenuCard
-                key={item.id}
-                item={item}
-                onSelect={() => setActiveItem(item)}
-              />
+              <MenuCard key={item.id} item={item} onSelect={() => setActiveItem(item)} />
             ))}
             {filteredItems.length === 0 ? (
               <div className="col-span-full flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-muted/30 py-14 text-center">
                 <Search className="h-8 w-8 text-muted-foreground/40" />
-                <p className="text-sm font-medium text-muted-foreground">{t("noDishes")}</p>
+                <p className="text-sm font-medium text-muted-foreground">{t('noDishes')}</p>
                 <button
-                  onClick={() => { setQuery(""); setCategoryId(""); setPriceFilter("all"); }}
+                  onClick={() => {
+                    setQuery('');
+                    setCategoryId('');
+                    setPriceFilter('all');
+                  }}
                   className="text-xs font-medium text-primary hover:underline"
                 >
-                  {t("clearFilters")}
+                  {t('clearFilters')}
                 </button>
               </div>
             ) : null}
@@ -663,13 +803,16 @@ export default function CustomerOrderingApp({ tableNumber }) {
         </section>
 
         {/* ── Cart sidebar ───────────────────────────────────── */}
-        <aside ref={cartRef} className="hidden scroll-mt-24 space-y-4 lg:block lg:sticky lg:top-24 lg:self-start">
+        <aside
+          ref={cartRef}
+          className="hidden scroll-mt-24 space-y-4 lg:block lg:sticky lg:top-24 lg:self-start"
+        >
           <Card className="overflow-hidden rounded-2xl border-border/60 shadow-sm">
             {/* Cart header */}
             <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-4 py-3">
               <div className="flex items-center gap-2">
                 <ShoppingBag className="h-4 w-4 text-primary" />
-                <h2 className="text-sm font-bold">{t("yourOrder")}</h2>
+                <h2 className="text-sm font-bold">{t('yourOrder')}</h2>
               </div>
               {cart.length > 0 ? (
                 <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-bold text-primary-foreground">
@@ -684,7 +827,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                 {cart.length === 0 ? (
                   <div className="flex flex-col items-center gap-2 py-8 text-center">
                     <ShoppingBag className="h-8 w-8 text-muted-foreground/30" />
-                    <p className="text-xs text-muted-foreground">{t("addDishes")}</p>
+                    <p className="text-xs text-muted-foreground">{t('addDishes')}</p>
                   </div>
                 ) : (
                   cart.map((item) => (
@@ -696,14 +839,16 @@ export default function CustomerOrderingApp({ tableNumber }) {
                         <div className="flex items-start justify-between gap-2">
                           <h3 className="text-sm font-medium leading-snug">{item.name}</h3>
                           <button
-                            onClick={() => setCart((c) => c.filter((e) => e.cartId !== item.cartId))}
+                            onClick={() =>
+                              setCart((c) => c.filter((e) => e.cartId !== item.cartId))
+                            }
                             aria-label="Remove item"
                             className="shrink-0 rounded-md p-0.5 text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         </div>
-                        {item.spiceLevel && item.spiceLevel !== "NORMAL" ? (
+                        {item.spiceLevel && item.spiceLevel !== 'NORMAL' ? (
                           <p className="mt-0.5 text-xs text-muted-foreground">{item.spiceLevel}</p>
                         ) : null}
                         <div className="mt-2 flex items-center justify-between">
@@ -715,7 +860,9 @@ export default function CustomerOrderingApp({ tableNumber }) {
                             >
                               <Minus className="h-3 w-3" />
                             </button>
-                            <span className="w-5 text-center text-sm font-semibold">{item.quantity}</span>
+                            <span className="w-5 text-center text-sm font-semibold">
+                              {item.quantity}
+                            </span>
                             <button
                               onClick={() => changeQuantity(item.cartId, 1)}
                               className="flex h-6 w-6 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition hover:border-primary hover:text-primary"
@@ -735,42 +882,50 @@ export default function CustomerOrderingApp({ tableNumber }) {
               {/* Promo code */}
               <div className="space-y-2">
                 <div className="flex gap-2">
-                <Input
-                  value={promoCode}
-                  onChange={(e) => handlePromoCodeChange(e.target.value)}
-                  placeholder={t("promoCode")}
-                  className="h-9 rounded-xl text-sm uppercase tracking-wider"
-                />
+                  <Input
+                    value={promoCode}
+                    onChange={(e) => handlePromoCodeChange(e.target.value)}
+                    placeholder={t('promoCode')}
+                    className="h-9 rounded-xl text-sm uppercase tracking-wider"
+                  />
                   <Button
                     type="button"
                     variant="outline"
                     className="h-9 shrink-0 rounded-xl px-3 text-xs"
-                    disabled={promoState.status === "checking"}
+                    disabled={promoState.status === 'checking'}
                     onClick={applyPromoCode}
                   >
                     <BadgePercent className="h-3.5 w-3.5" />
-                    {promoState.status === "checking" ? t("checking") : t("apply")}
+                    {promoState.status === 'checking' ? t('checking') : t('apply')}
                   </Button>
                 </div>
                 {promoState.message ? (
-                  <div className={cn(
-                    "rounded-xl border px-3 py-2 text-xs",
-                    promoState.status === "valid"
-                      ? "border-primary/30 bg-primary/8 text-primary"
-                      : "border-destructive/20 bg-destructive/8 text-destructive"
-                  )}>
+                  <div
+                    className={cn(
+                      'rounded-xl border px-3 py-2 text-xs',
+                      promoState.status === 'valid'
+                        ? 'border-primary/30 bg-primary/8 text-primary'
+                        : 'border-destructive/20 bg-destructive/8 text-destructive'
+                    )}
+                  >
                     <div className="flex items-center justify-between gap-2">
                       <span>{promoState.message}</span>
-                      {promoState.status === "valid" ? (
-                        <button type="button" className="font-semibold underline-offset-2 hover:underline" onClick={togglePromoDetail}>
-                          {promoState.showDetail ? t("hideDetail") : t("showDetail")}
+                      {promoState.status === 'valid' ? (
+                        <button
+                          type="button"
+                          className="font-semibold underline-offset-2 hover:underline"
+                          onClick={togglePromoDetail}
+                        >
+                          {promoState.showDetail ? t('hideDetail') : t('showDetail')}
                         </button>
                       ) : null}
                     </div>
-                    {promoState.status === "valid" && promoState.showDetail ? (
+                    {promoState.status === 'valid' && promoState.showDetail ? (
                       <div className="mt-2 space-y-1 border-t border-primary/20 pt-2 text-primary/90">
                         <div className="font-semibold">{promoState.detail?.code}</div>
-                        {promoState.detail?.description ? <div>{promoState.detail.description}</div> : null}
+                        {promoState.detail?.description ? (
+                          <div>{promoState.detail.description}</div>
+                        ) : null}
                         <div>{formatPromoValue(promoState.detail)}</div>
                       </div>
                     ) : null}
@@ -781,20 +936,22 @@ export default function CustomerOrderingApp({ tableNumber }) {
               {/* Total */}
               <div className="rounded-xl bg-muted/50 px-4 py-3">
                 <div className="mb-1 flex items-baseline justify-between">
-                  <span className="text-xs text-muted-foreground">{t("subtotal")}</span>
+                  <span className="text-xs text-muted-foreground">{t('subtotal')}</span>
                   <span className="text-sm font-semibold">{usd(totals.subtotalUsd)}</span>
                 </div>
                 {totals.discountUsd > 0 ? (
                   <div className="mb-1 flex items-baseline justify-between text-primary">
-                    <span className="text-xs">{t("discount")}</span>
+                    <span className="text-xs">{t('discount')}</span>
                     <span className="text-sm font-semibold">-{usd(totals.discountUsd)}</span>
                   </div>
                 ) : null}
                 <div className="flex items-baseline justify-between">
-                  <span className="text-sm text-muted-foreground">{t("total")}</span>
+                  <span className="text-sm text-muted-foreground">{t('total')}</span>
                   <span className="text-base font-bold">{usd(totals.totalUsd)}</span>
                 </div>
-                <div className="mt-0.5 text-right text-xs text-muted-foreground">{khr(totals.totalKhr)}</div>
+                <div className="mt-0.5 text-right text-xs text-muted-foreground">
+                  {khr(totals.totalKhr)}
+                </div>
               </div>
 
               {/* Place order button */}
@@ -806,13 +963,15 @@ export default function CustomerOrderingApp({ tableNumber }) {
                 {submitting ? (
                   <span className="flex items-center gap-2">
                     <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
-                    {t("placingOrder")}
+                    {t('placingOrder')}
                   </span>
                 ) : (
                   <span className="flex items-center gap-2">
                     <ShoppingBag className="h-4 w-4" />
-                    {t("placeOrder")}
-                    {cart.length > 0 ? <ChevronRight className="ml-auto h-4 w-4 opacity-60" /> : null}
+                    {t('placeOrder')}
+                    {cart.length > 0 ? (
+                      <ChevronRight className="ml-auto h-4 w-4 opacity-60" />
+                    ) : null}
                   </span>
                 )}
               </Button>
@@ -823,51 +982,76 @@ export default function CustomerOrderingApp({ tableNumber }) {
           {visibleOrders.map((order) => {
             const payment = payments[order.id];
             const secs = secsRemaining(payment);
-            const isCancelled = order.status === "CANCELLED" || payment?.status === "FAILED";
-            const isPaid = !isCancelled && (payment?.status === "PAID" || ["PAID", "RECEIVED", "PREPARING", "READY", "COMPLETED"].includes(order.status));
-            const isReceived = order.status === "RECEIVED";
-            const isExpired = order.status === "EXPIRED" || payment?.status === "EXPIRED" || (payment?.status === "PENDING" && secs === 0);
+            const isCancelled = order.status === 'CANCELLED' || payment?.status === 'FAILED';
+            const isPaid =
+              !isCancelled &&
+              (payment?.status === 'PAID' ||
+                ['PAID', 'RECEIVED', 'PREPARING', 'COMPLETED'].includes(order.status));
+            const isReceived = order.status === 'RECEIVED';
+            const isExpired =
+              order.status === 'EXPIRED' ||
+              payment?.status === 'EXPIRED' ||
+              (payment?.status === 'PENDING' && secs === 0);
             const canAlertStaff = canRequestStaffAlert(order, now);
             const staffAlertSent = alertedOrderIds.includes(order.id);
 
             return (
-              <Card key={order.id} className="overflow-hidden rounded-2xl border-border/60 shadow-sm">
-	                <div className={cn(
-	                  "flex items-center justify-between border-b border-border/60 px-4 py-2.5",
-	                  isReceived ? "bg-accent/8" : isPaid ? "bg-primary/6" : "bg-muted/30"
-	                )}>
+              <Card
+                key={order.id}
+                className="overflow-hidden rounded-2xl border-border/60 shadow-sm"
+              >
+                <div
+                  className={cn(
+                    'flex items-center justify-between border-b border-border/60 px-4 py-2.5',
+                    isReceived ? 'bg-accent/8' : isPaid ? 'bg-primary/6' : 'bg-muted/30'
+                  )}
+                >
                   <div>
                     <p className="text-sm font-bold">{order.orderNumber}</p>
-                    <p className="text-xs text-muted-foreground capitalize">{order.status?.toLowerCase()}</p>
+                    <p className="text-xs text-muted-foreground capitalize">
+                      {order.status?.toLowerCase()}
+                    </p>
                   </div>
-                  <span className={cn(
-                    "rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide",
-	                    isReceived
-	                      ? "bg-accent/15 text-accent"
-	                      : isPaid
-	                      ? "bg-primary/15 text-primary"
-                      : isCancelled
-                      ? "bg-destructive/10 text-destructive"
-                      : isExpired
-                      ? "bg-destructive/10 text-destructive"
-                      : payment
-                      ? "bg-secondary/20 text-secondary-foreground"
-                      : "bg-muted text-muted-foreground"
-                  )}>
-	                    {isReceived ? t("receivedByStaff") : isPaid ? t("paid") : isCancelled ? t("cancelled") : isExpired ? t("expired") : payment ? t("pending") : t("unpaid")}
+                  <span
+                    className={cn(
+                      'rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide',
+                      isReceived
+                        ? 'bg-accent/15 text-accent'
+                        : isPaid
+                          ? 'bg-primary/15 text-primary'
+                          : isCancelled
+                            ? 'bg-destructive/10 text-destructive'
+                            : isExpired
+                              ? 'bg-destructive/10 text-destructive'
+                              : payment
+                                ? 'bg-secondary/20 text-secondary-foreground'
+                                : 'bg-muted text-muted-foreground'
+                    )}
+                  >
+                    {isReceived
+                      ? t('receivedByStaff')
+                      : isPaid
+                        ? t('paid')
+                        : isCancelled
+                          ? t('cancelled')
+                          : isExpired
+                            ? t('expired')
+                            : payment
+                              ? t('pending')
+                              : t('unpaid')}
                   </span>
                 </div>
                 <CardContent className="space-y-3 p-4">
-	                  <div className="flex items-baseline gap-2">
-	                    <span className="text-base font-bold">{displayUsd(order.totalUsd)}</span>
-	                    <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
-	                  </div>
-	                  <CustomerOrderProgress status={order.status} />
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-base font-bold">{displayUsd(order.totalUsd)}</span>
+                    <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
+                  </div>
+                  <CustomerOrderProgress status={order.status} />
 
-	                  {isCancelled ? (
+                  {isCancelled ? (
                     <>
                       <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
-                        {t("orderCancelled")}
+                        {t('orderCancelled')}
                       </div>
                       <Button
                         className="h-9 w-full rounded-xl text-sm"
@@ -875,20 +1059,20 @@ export default function CustomerOrderingApp({ tableNumber }) {
                         onClick={() => deleteLocalOrder(order.id)}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
-                        {t("deleteOrder")}
+                        {t('deleteOrder')}
                       </Button>
                     </>
-	                  ) : isPaid ? (
+                  ) : isPaid ? (
                     <>
                       <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/8 px-3 py-2.5 text-xs font-medium text-primary">
                         <CheckCircle2 className="h-4 w-4 shrink-0" />
-                        {t("paymentConfirmed")}
+                        {t('paymentConfirmed')}
                       </div>
                       <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/8 px-3 py-2 text-xs font-medium text-primary">
                         <Clock className="h-3.5 w-3.5 shrink-0" />
-                        {t("paidMinutes")} {paidWaitingMinutes(order, payment, now)}m
+                        {t('paidMinutes')} {paidWaitingMinutes(order, payment, now)}m
                       </div>
-                      {(canAlertStaff || staffAlertSent) ? (
+                      {canAlertStaff || staffAlertSent ? (
                         <Button
                           className="h-9 w-full rounded-xl text-sm"
                           variant="secondary"
@@ -896,7 +1080,11 @@ export default function CustomerOrderingApp({ tableNumber }) {
                           onClick={() => alertStaffFor(order.id)}
                         >
                           <AlertCircle className="h-3.5 w-3.5" />
-                          {staffAlertSent ? t("customerAlertSentShort") : alertingOrderId === order.id ? t("checking") : t("alertStaff")}
+                          {staffAlertSent
+                            ? t('customerAlertSentShort')
+                            : alertingOrderId === order.id
+                              ? t('checking')
+                              : t('alertStaff')}
                         </Button>
                       ) : null}
                       <a
@@ -904,7 +1092,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                         target="_blank"
                         className="flex items-center justify-center gap-1.5 text-sm font-medium text-primary hover:underline"
                       >
-                        {t("openReceipt")}
+                        {t('openReceipt')}
                         <ChevronRight className="h-3.5 w-3.5" />
                       </a>
                     </>
@@ -913,12 +1101,12 @@ export default function CustomerOrderingApp({ tableNumber }) {
                       {payment && !isExpired ? (
                         <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                           <Clock className="h-3.5 w-3.5 shrink-0" />
-                          {t("expiresIn")} {formatDuration(secs)}
+                          {t('expiresIn')} {formatDuration(secs)}
                         </div>
                       ) : null}
                       {isExpired ? (
                         <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
-                          {t("qrExpiredShort")}
+                          {t('qrExpiredShort')}
                         </div>
                       ) : null}
                       <div className="grid gap-2">
@@ -928,7 +1116,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                           onClick={() => openPaymentFor(order.id)}
                         >
                           <Zap className="h-3.5 w-3.5" />
-                          {payment ? t("viewPayment") : t("payWithBakong")}
+                          {payment ? t('viewPayment') : t('payWithBakong')}
                         </Button>
                         <Button
                           className="h-9 w-full rounded-xl text-sm"
@@ -936,7 +1124,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                           onClick={() => cancelPaymentFor(order.id)}
                         >
                           <X className="h-3.5 w-3.5" />
-                          {t("cancelPayment")}
+                          {t('cancelPayment')}
                         </Button>
                       </div>
                     </>
@@ -955,23 +1143,27 @@ export default function CustomerOrderingApp({ tableNumber }) {
             type="button"
             onClick={() => setCartOpen(true)}
             className={cn(
-              "relative flex w-full items-center justify-between rounded-2xl px-5 py-3.5 shadow-lg transition-all",
+              'relative flex w-full items-center justify-between rounded-2xl px-5 py-3.5 shadow-lg transition-all',
               cart.length > 0
-                ? "bg-primary text-primary-foreground"
-                : "bg-card border border-border text-foreground"
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-card border border-border text-foreground'
             )}
           >
-            <span className={cn(
-              "absolute -top-3 left-1/2 flex h-6 w-12 -translate-x-1/2 items-center justify-center rounded-full border shadow-sm",
-              cart.length > 0
-                ? "border-primary/30 bg-primary text-primary-foreground"
-                : "border-border bg-card text-muted-foreground"
-            )}>
+            <span
+              className={cn(
+                'absolute -top-3 left-1/2 flex h-6 w-12 -translate-x-1/2 items-center justify-center rounded-full border shadow-sm',
+                cart.length > 0
+                  ? 'border-primary/30 bg-primary text-primary-foreground'
+                  : 'border-border bg-card text-muted-foreground'
+              )}
+            >
               <ChevronUp className="h-4 w-4" />
             </span>
             <span className="flex items-center gap-2.5 text-sm font-semibold">
               <ShoppingBag className="h-4 w-4" />
-              {cart.length > 0 ? `${cart.length} ${cart.length === 1 ? "item" : "items"}` : t("viewCart")}
+              {cart.length > 0
+                ? `${cart.length} ${cart.length === 1 ? 'item' : 'items'}`
+                : t('viewCart')}
             </span>
             {cart.length > 0 ? (
               <span className="text-sm font-bold">{usd(totals.totalUsd)}</span>
@@ -1046,15 +1238,15 @@ function MenuCard({ item, onSelect }) {
       tabIndex={item.available ? 0 : -1}
       onClick={selectItem}
       onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
+        if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           selectItem();
         }
       }}
       aria-label={`Customize ${item.name}`}
       className={cn(
-        "group flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-md sm:rounded-2xl",
-        item.available ? "cursor-pointer active:scale-[0.99]" : "cursor-not-allowed opacity-75"
+        'group flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-md sm:rounded-2xl',
+        item.available ? 'cursor-pointer active:scale-[0.99]' : 'cursor-not-allowed opacity-75'
       )}
     >
       {/* Image */}
@@ -1075,21 +1267,25 @@ function MenuCard({ item, onSelect }) {
         {/* Dietary tags overlay */}
         {tags(item.dietaryTags).length > 0 ? (
           <div className="absolute left-1.5 top-1.5 flex flex-wrap gap-1 sm:left-2 sm:top-2">
-            {tags(item.dietaryTags).slice(0, 2).map((tag) => (
-              <span
-                key={tag}
-                className="rounded-full bg-background/80 px-1.5 py-0.5 text-[9px] font-semibold backdrop-blur-sm sm:px-2 sm:text-[10px]"
-              >
-                {tag}
-              </span>
-            ))}
+            {tags(item.dietaryTags)
+              .slice(0, 2)
+              .map((tag) => (
+                <span
+                  key={tag}
+                  className="rounded-full bg-background/80 px-1.5 py-0.5 text-[9px] font-semibold backdrop-blur-sm sm:px-2 sm:text-[10px]"
+                >
+                  {tag}
+                </span>
+              ))}
           </div>
         ) : null}
       </div>
 
       {/* Body */}
       <div className="flex flex-1 flex-col p-2.5 sm:p-3.5">
-        <h2 className="line-clamp-2 text-xs font-bold leading-snug sm:line-clamp-1 sm:text-sm">{item.name}</h2>
+        <h2 className="line-clamp-2 text-xs font-bold leading-snug sm:line-clamp-1 sm:text-sm">
+          {item.name}
+        </h2>
         <p className="mt-1 line-clamp-2 flex-1 text-[11px] leading-snug text-muted-foreground sm:text-xs sm:leading-relaxed">
           {item.description}
         </p>
@@ -1097,7 +1293,9 @@ function MenuCard({ item, onSelect }) {
         <div className="mt-2 flex items-center justify-between gap-2 sm:mt-3">
           <div>
             <div className="text-xs font-bold sm:text-sm">{displayUsd(item.priceUsd)}</div>
-            <div className="text-[9px] text-muted-foreground sm:text-[10px]">{khr(item.priceKhr)}</div>
+            <div className="text-[9px] text-muted-foreground sm:text-[10px]">
+              {khr(item.priceKhr)}
+            </div>
           </div>
           <button
             onClick={(event) => {
@@ -1106,12 +1304,12 @@ function MenuCard({ item, onSelect }) {
             }}
             disabled={!item.available}
             className={cn(
-              "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-all sm:h-8 sm:w-8 sm:rounded-xl",
+              'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-all sm:h-8 sm:w-8 sm:rounded-xl',
               item.available
-                ? "bg-primary text-primary-foreground shadow-sm hover:opacity-90 active:scale-95"
-                : "cursor-not-allowed bg-muted text-muted-foreground"
+                ? 'bg-primary text-primary-foreground shadow-sm hover:opacity-90 active:scale-95'
+                : 'cursor-not-allowed bg-muted text-muted-foreground'
             )}
-            aria-label={`${t("addToCart")} ${item.name}`}
+            aria-label={`${t('addToCart')} ${item.name}`}
           >
             <Plus className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
           </button>
@@ -1149,7 +1347,10 @@ function MobileCartSheet({
   const { t } = useLanguage();
 
   return (
-    <div className="fixed inset-0 z-40 flex items-end overflow-hidden bg-black/40 backdrop-blur-sm lg:hidden" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-40 flex items-end overflow-hidden bg-black/40 backdrop-blur-sm lg:hidden"
+      onClick={onClose}
+    >
       <div
         className="bottom-sheet-animate flex max-h-[92dvh] w-full flex-col rounded-t-2xl bg-card text-card-foreground shadow-xl"
         onClick={(event) => event.stopPropagation()}
@@ -1160,14 +1361,18 @@ function MobileCartSheet({
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border/60 bg-card/95 p-4 backdrop-blur">
           <div className="flex items-center gap-2">
             <ShoppingBag className="h-4 w-4 text-primary" />
-            <h2 className="text-base font-bold">{t("yourOrder")}</h2>
+            <h2 className="text-base font-bold">{t('yourOrder')}</h2>
             {cart.length > 0 ? (
               <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-bold text-primary-foreground">
                 {cart.length}
               </span>
             ) : null}
           </div>
-          <button onClick={onClose} className="rounded-xl border border-border p-1.5 text-muted-foreground hover:text-foreground" aria-label="Close cart">
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-border p-1.5 text-muted-foreground hover:text-foreground"
+            aria-label="Close cart"
+          >
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -1177,23 +1382,30 @@ function MobileCartSheet({
             {cart.length === 0 ? (
               <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-muted/30 py-8 text-center">
                 <ShoppingBag className="h-8 w-8 text-muted-foreground/30" />
-                <p className="text-xs text-muted-foreground">{t("addDishes")}</p>
+                <p className="text-xs text-muted-foreground">{t('addDishes')}</p>
               </div>
             ) : (
               cart.map((item) => (
-                <div key={item.cartId} className="flex gap-3 rounded-xl border border-border/50 bg-card p-3">
+                <div
+                  key={item.cartId}
+                  className="flex gap-3 rounded-xl border border-border/50 bg-card p-3"
+                >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-2">
                       <h3 className="text-sm font-medium leading-snug">{item.name}</h3>
                       <button
-                        onClick={() => setCart((current) => current.filter((entry) => entry.cartId !== item.cartId))}
+                        onClick={() =>
+                          setCart((current) =>
+                            current.filter((entry) => entry.cartId !== item.cartId)
+                          )
+                        }
                         aria-label="Remove item"
                         className="shrink-0 rounded-md p-0.5 text-muted-foreground hover:text-destructive"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </div>
-                    {item.spiceLevel && item.spiceLevel !== "NORMAL" ? (
+                    {item.spiceLevel && item.spiceLevel !== 'NORMAL' ? (
                       <p className="mt-0.5 text-xs text-muted-foreground">{item.spiceLevel}</p>
                     ) : null}
                     <div className="mt-2 flex items-center justify-between">
@@ -1205,7 +1417,9 @@ function MobileCartSheet({
                         >
                           <Minus className="h-3 w-3" />
                         </button>
-                        <span className="w-6 text-center text-sm font-semibold">{item.quantity}</span>
+                        <span className="w-6 text-center text-sm font-semibold">
+                          {item.quantity}
+                        </span>
                         <button
                           onClick={() => changeQuantity(item.cartId, 1)}
                           className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition hover:border-primary hover:text-primary"
@@ -1227,39 +1441,47 @@ function MobileCartSheet({
               <Input
                 value={promoCode}
                 onChange={(event) => onPromoCodeChange(event.target.value)}
-                placeholder={t("promoCode")}
+                placeholder={t('promoCode')}
                 className="h-10 rounded-xl text-sm uppercase tracking-wider"
               />
               <Button
                 type="button"
                 variant="outline"
                 className="h-10 shrink-0 rounded-xl px-3 text-xs"
-                disabled={promoState.status === "checking"}
+                disabled={promoState.status === 'checking'}
                 onClick={onApplyPromo}
               >
                 <BadgePercent className="h-3.5 w-3.5" />
-                {promoState.status === "checking" ? t("checking") : t("apply")}
+                {promoState.status === 'checking' ? t('checking') : t('apply')}
               </Button>
             </div>
             {promoState.message ? (
-              <div className={cn(
-                "rounded-xl border px-3 py-2 text-xs",
-                promoState.status === "valid"
-                  ? "border-primary/30 bg-primary/8 text-primary"
-                  : "border-destructive/20 bg-destructive/8 text-destructive"
-              )}>
+              <div
+                className={cn(
+                  'rounded-xl border px-3 py-2 text-xs',
+                  promoState.status === 'valid'
+                    ? 'border-primary/30 bg-primary/8 text-primary'
+                    : 'border-destructive/20 bg-destructive/8 text-destructive'
+                )}
+              >
                 <div className="flex items-center justify-between gap-2">
                   <span>{promoState.message}</span>
-                  {promoState.status === "valid" ? (
-                    <button type="button" className="font-semibold underline-offset-2 hover:underline" onClick={onTogglePromoDetail}>
-                      {promoState.showDetail ? t("hideDetail") : t("showDetail")}
+                  {promoState.status === 'valid' ? (
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={onTogglePromoDetail}
+                    >
+                      {promoState.showDetail ? t('hideDetail') : t('showDetail')}
                     </button>
                   ) : null}
                 </div>
-                {promoState.status === "valid" && promoState.showDetail ? (
+                {promoState.status === 'valid' && promoState.showDetail ? (
                   <div className="mt-2 space-y-1 border-t border-primary/20 pt-2 text-primary/90">
                     <div className="font-semibold">{promoState.detail?.code}</div>
-                    {promoState.detail?.description ? <div>{promoState.detail.description}</div> : null}
+                    {promoState.detail?.description ? (
+                      <div>{promoState.detail.description}</div>
+                    ) : null}
                     <div>{formatPromoValue(promoState.detail)}</div>
                   </div>
                 ) : null}
@@ -1269,20 +1491,22 @@ function MobileCartSheet({
 
           <div className="rounded-xl bg-muted/50 px-4 py-3">
             <div className="mb-1 flex items-baseline justify-between">
-              <span className="text-xs text-muted-foreground">{t("subtotal")}</span>
+              <span className="text-xs text-muted-foreground">{t('subtotal')}</span>
               <span className="text-sm font-semibold">{usd(totals.subtotalUsd)}</span>
             </div>
             {totals.discountUsd > 0 ? (
               <div className="mb-1 flex items-baseline justify-between text-primary">
-                <span className="text-xs">{t("discount")}</span>
+                <span className="text-xs">{t('discount')}</span>
                 <span className="text-sm font-semibold">-{usd(totals.discountUsd)}</span>
               </div>
             ) : null}
             <div className="flex items-baseline justify-between">
-              <span className="text-sm text-muted-foreground">{t("total")}</span>
+              <span className="text-sm text-muted-foreground">{t('total')}</span>
               <span className="text-base font-bold">{usd(totals.totalUsd)}</span>
             </div>
-            <div className="mt-0.5 text-right text-xs text-muted-foreground">{khr(totals.totalKhr)}</div>
+            <div className="mt-0.5 text-right text-xs text-muted-foreground">
+              {khr(totals.totalKhr)}
+            </div>
           </div>
 
           <Button
@@ -1290,63 +1514,90 @@ function MobileCartSheet({
             disabled={!cart.length || totals.totalUsd <= 0 || submitting}
             onClick={onSubmitOrder}
           >
-            {submitting ? t("placingOrder") : (
+            {submitting ? (
+              t('placingOrder')
+            ) : (
               <>
                 <ShoppingBag className="h-4 w-4" />
-                {t("placeOrder")}
+                {t('placeOrder')}
               </>
             )}
           </Button>
 
           {orders.length ? (
             <div className="space-y-3 border-t border-border/60 pt-4">
-              <h3 className="text-sm font-bold">{t("recentOrders")}</h3>
+              <h3 className="text-sm font-bold">{t('recentOrders')}</h3>
               {orders.map((order) => {
                 const payment = payments[order.id];
                 const secs = secsRemaining(payment);
-                const isCancelled = order.status === "CANCELLED" || payment?.status === "FAILED";
-                const isPaid = !isCancelled && (payment?.status === "PAID" || ["PAID", "RECEIVED", "PREPARING", "READY", "COMPLETED"].includes(order.status));
-                const isReceived = order.status === "RECEIVED";
-                const isExpired = order.status === "EXPIRED" || payment?.status === "EXPIRED" || (payment?.status === "PENDING" && secs === 0);
+                const isCancelled = order.status === 'CANCELLED' || payment?.status === 'FAILED';
+                const isPaid =
+                  !isCancelled &&
+                  (payment?.status === 'PAID' ||
+                    ['PAID', 'RECEIVED', 'PREPARING', 'COMPLETED'].includes(order.status));
+                const isReceived = order.status === 'RECEIVED';
+                const isExpired =
+                  order.status === 'EXPIRED' ||
+                  payment?.status === 'EXPIRED' ||
+                  (payment?.status === 'PENDING' && secs === 0);
                 const canAlertStaff = canRequestStaffAlert(order, now);
                 const staffAlertSent = alertedOrderIds.includes(order.id);
                 return (
-                  <div key={order.id} className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
-		                    <div className={cn(
-		                      "flex items-center justify-between border-b border-border/60 px-4 py-2.5",
-		                      isReceived ? "bg-accent/8" : isPaid ? "bg-primary/6" : "bg-muted/30"
-	                    )}>
+                  <div
+                    key={order.id}
+                    className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm"
+                  >
+                    <div
+                      className={cn(
+                        'flex items-center justify-between border-b border-border/60 px-4 py-2.5',
+                        isReceived ? 'bg-accent/8' : isPaid ? 'bg-primary/6' : 'bg-muted/30'
+                      )}
+                    >
                       <div>
                         <p className="text-sm font-bold">{order.orderNumber}</p>
-                        <p className="text-xs text-muted-foreground capitalize">{order.status?.toLowerCase()}</p>
+                        <p className="text-xs text-muted-foreground capitalize">
+                          {order.status?.toLowerCase()}
+                        </p>
                       </div>
-                      <span className={cn(
-                        "rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide",
-	                        isReceived
-	                          ? "bg-accent/15 text-accent"
-	                          : isPaid
-	                          ? "bg-primary/15 text-primary"
-                          : isCancelled
-                          ? "bg-destructive/10 text-destructive"
-                          : isExpired
-                          ? "bg-destructive/10 text-destructive"
-                          : payment
-                          ? "bg-secondary/20 text-secondary-foreground"
-                          : "bg-muted text-muted-foreground"
-                      )}>
-	                        {isReceived ? t("receivedByStaff") : isPaid ? t("paid") : isCancelled ? t("cancelled") : isExpired ? t("expired") : payment ? t("pending") : t("unpaid")}
+                      <span
+                        className={cn(
+                          'rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide',
+                          isReceived
+                            ? 'bg-accent/15 text-accent'
+                            : isPaid
+                              ? 'bg-primary/15 text-primary'
+                              : isCancelled
+                                ? 'bg-destructive/10 text-destructive'
+                                : isExpired
+                                  ? 'bg-destructive/10 text-destructive'
+                                  : payment
+                                    ? 'bg-secondary/20 text-secondary-foreground'
+                                    : 'bg-muted text-muted-foreground'
+                        )}
+                      >
+                        {isReceived
+                          ? t('receivedByStaff')
+                          : isPaid
+                            ? t('paid')
+                            : isCancelled
+                              ? t('cancelled')
+                              : isExpired
+                                ? t('expired')
+                                : payment
+                                  ? t('pending')
+                                  : t('unpaid')}
                       </span>
                     </div>
                     <div className="space-y-3 p-4">
-	                      <div className="flex items-baseline gap-2">
-	                        <span className="text-base font-bold">{displayUsd(order.totalUsd)}</span>
-	                        <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
-	                      </div>
-	                      <CustomerOrderProgress status={order.status} />
-	                      {isCancelled ? (
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-base font-bold">{displayUsd(order.totalUsd)}</span>
+                        <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
+                      </div>
+                      <CustomerOrderProgress status={order.status} />
+                      {isCancelled ? (
                         <>
                           <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
-                            {t("orderCancelled")}
+                            {t('orderCancelled')}
                           </div>
                           <Button
                             className="h-9 w-full rounded-xl text-sm"
@@ -1354,16 +1605,16 @@ function MobileCartSheet({
                             onClick={() => onDeleteOrder(order.id)}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
-                            {t("deleteOrder")}
+                            {t('deleteOrder')}
                           </Button>
                         </>
-	                      ) : isPaid ? (
+                      ) : isPaid ? (
                         <div className="grid gap-2">
                           <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/8 px-3 py-2 text-xs font-medium text-primary">
                             <Clock className="h-3.5 w-3.5 shrink-0" />
-                            {t("paidMinutes")} {paidWaitingMinutes(order, payment, now)}m
+                            {t('paidMinutes')} {paidWaitingMinutes(order, payment, now)}m
                           </div>
-                          {(canAlertStaff || staffAlertSent) ? (
+                          {canAlertStaff || staffAlertSent ? (
                             <Button
                               className="h-9 w-full rounded-xl text-sm"
                               variant="secondary"
@@ -1371,7 +1622,11 @@ function MobileCartSheet({
                               onClick={() => onAlertStaff(order.id)}
                             >
                               <AlertCircle className="h-3.5 w-3.5" />
-                              {staffAlertSent ? t("customerAlertSentShort") : alertingOrderId === order.id ? t("checking") : t("alertStaff")}
+                              {staffAlertSent
+                                ? t('customerAlertSentShort')
+                                : alertingOrderId === order.id
+                                  ? t('checking')
+                                  : t('alertStaff')}
                             </Button>
                           ) : null}
                           <a
@@ -1379,7 +1634,7 @@ function MobileCartSheet({
                             target="_blank"
                             className="flex items-center justify-center gap-1.5 text-sm font-medium text-primary hover:underline"
                           >
-                            {t("openReceipt")}
+                            {t('openReceipt')}
                             <ChevronRight className="h-3.5 w-3.5" />
                           </a>
                         </div>
@@ -1387,7 +1642,7 @@ function MobileCartSheet({
                         <div className="grid gap-2">
                           {isExpired ? (
                             <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
-                              {t("qrExpiredShort")}
+                              {t('qrExpiredShort')}
                             </div>
                           ) : null}
                           <Button
@@ -1399,7 +1654,7 @@ function MobileCartSheet({
                             }}
                           >
                             <Zap className="h-3.5 w-3.5" />
-                            {payment ? t("viewPayment") : t("payWithBakong")}
+                            {payment ? t('viewPayment') : t('payWithBakong')}
                           </Button>
                           <Button
                             className="h-9 w-full rounded-xl text-sm"
@@ -1407,7 +1662,7 @@ function MobileCartSheet({
                             onClick={() => onCancelPayment(order.id)}
                           >
                             <X className="h-3.5 w-3.5" />
-                            {t("cancelPayment")}
+                            {t('cancelPayment')}
                           </Button>
                         </div>
                       )}
@@ -1426,15 +1681,14 @@ function MobileCartSheet({
 function CustomerOrderProgress({ status }) {
   const { t } = useLanguage();
   const steps = [
-    { status: "PENDING_PAYMENT", label: t("awaitingPayment") },
-    { status: "RECEIVED", label: t("receivedByStaff") },
-    { status: "PREPARING", label: t("acceptedPreparing") },
-    { status: "READY", label: t("readyForPickup") },
-    { status: "COMPLETED", label: t("orderComplete") },
+    { status: 'PENDING_PAYMENT', label: t('awaitingPayment') },
+    { status: 'RECEIVED', label: t('receivedByStaff') },
+    { status: 'PREPARING', label: t('acceptedPreparing') },
+    { status: 'COMPLETED', label: t('orderComplete') },
   ];
   const activeIndex = customerStatusStepIndex(status);
 
-  if (["CANCELLED", "REJECTED", "EXPIRED"].includes(status)) {
+  if (['CANCELLED', 'REJECTED', 'EXPIRED'].includes(status)) {
     return (
       <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs font-medium text-destructive">
         {customerStatusLabel(status, t)}
@@ -1451,11 +1705,11 @@ function CustomerOrderProgress({ status }) {
           <div
             key={step.status}
             className={cn(
-              "min-w-[68px] rounded-lg border px-2 py-1.5 text-center text-[10px] font-semibold",
+              'min-w-[68px] rounded-lg border px-2 py-1.5 text-center text-[10px] font-semibold',
               done
-                ? "border-primary/30 bg-primary/10 text-primary"
-                : "border-border bg-muted/30 text-muted-foreground",
-              current ? "ring-1 ring-primary/30" : ""
+                ? 'border-primary/30 bg-primary/10 text-primary'
+                : 'border-border bg-muted/30 text-muted-foreground',
+              current ? 'ring-1 ring-primary/30' : ''
             )}
           >
             {step.label}
@@ -1469,8 +1723,55 @@ function CustomerOrderProgress({ status }) {
 /* ── PaymentModal ─────────────────────────────────────────── */
 function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, onCancel }) {
   const { t } = useLanguage();
-  const isPaid = payment.status === "PAID";
-  const isExpired = payment.status === "EXPIRED" || secondsRemaining === 0;
+  const [showQr, setShowQr] = useState(false);
+  const [selectedPaymentAppId, setSelectedPaymentAppId] = useState(PAYMENT_APPS[0].id);
+  const [openingPaymentApp, setOpeningPaymentApp] = useState(false);
+  const [fallbackMessage, setFallbackMessage] = useState('');
+  const fallbackTimerRef = useRef(null);
+  const visibilityChangedRef = useRef(false);
+  const isPaid = payment.status === 'PAID';
+  const isExpired = payment.status === 'EXPIRED' || secondsRemaining === 0;
+  const selectedPaymentApp =
+    PAYMENT_APPS.find((app) => app.id === selectedPaymentAppId) || PAYMENT_APPS[0];
+
+  useEffect(() => {
+    setShowQr(false);
+    setSelectedPaymentAppId(PAYMENT_APPS[0].id);
+    setOpeningPaymentApp(false);
+    setFallbackMessage('');
+    return () => {
+      if (fallbackTimerRef.current) {
+        window.clearTimeout(fallbackTimerRef.current);
+      }
+    };
+  }, [payment.id]);
+
+  function openPaymentApp() {
+    const deepLink = buildPaymentAppDeepLink(selectedPaymentApp, payment);
+    visibilityChangedRef.current = document.visibilityState === 'hidden';
+    setOpeningPaymentApp(true);
+    setFallbackMessage('');
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        visibilityChangedRef.current = true;
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    if (fallbackTimerRef.current) {
+      window.clearTimeout(fallbackTimerRef.current);
+    }
+    window.location.href = deepLink;
+    fallbackTimerRef.current = window.setTimeout(() => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      setOpeningPaymentApp(false);
+      if (!visibilityChangedRef.current && document.visibilityState === 'visible') {
+        setFallbackMessage(t('bankAppNotOpened'));
+        setShowQr(true);
+      }
+    }, 1500);
+  }
 
   return (
     <div className="fixed inset-0 z-40 flex items-end bg-black/40 backdrop-blur-sm sm:items-center sm:p-4">
@@ -1478,7 +1779,15 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
         {/* Modal header */}
         <div className="flex items-start justify-between gap-4 border-b border-border/60 p-5">
           <div>
-            <h2 className="text-lg font-bold">{isPaid ? t("paymentReceived") : isExpired ? t("paymentExpired") : t("scanToPay")}</h2>
+            <h2 className="text-lg font-bold">
+              {isPaid
+                ? t('paymentReceived')
+                : isExpired
+                  ? t('paymentExpired')
+                  : showQr
+                    ? t('scanToPay')
+                    : t('choosePaymentMethod')}
+            </h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {order?.orderNumber} · {payment.paymentNumber}
             </p>
@@ -1493,10 +1802,34 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
         </div>
 
         <div className="space-y-4 p-5 text-center">
-          {!isPaid && !isExpired ? (
-            <div className="mx-auto inline-flex rounded-2xl border border-border bg-white p-4 shadow-sm" data-payment-qr={payment.id}>
-              <QRCodeSVG value={payment.khqrString} size={220} includeMargin level="M" />
-            </div>
+          {!isPaid && !isExpired && !showQr ? (
+            <PaymentOptionsStep
+              payment={payment}
+              apps={PAYMENT_APPS}
+              selectedPaymentAppId={selectedPaymentAppId}
+              openingPaymentApp={openingPaymentApp}
+              fallbackMessage={fallbackMessage}
+              onSelectPaymentApp={setSelectedPaymentAppId}
+              onOpenPaymentApp={openPaymentApp}
+              onShowQr={() => {
+                setFallbackMessage('');
+                setShowQr(true);
+              }}
+            />
+          ) : !isPaid && !isExpired ? (
+            <>
+              {fallbackMessage ? (
+                <div className="rounded-xl border border-secondary/30 bg-secondary/10 px-3 py-2 text-xs font-medium text-secondary-foreground">
+                  {fallbackMessage}
+                </div>
+              ) : null}
+              <div
+                className="mx-auto inline-flex rounded-2xl border border-border bg-white p-4 shadow-sm"
+                data-payment-qr={payment.id}
+              >
+                <QRCodeSVG value={payment.khqrString} size={220} includeMargin level="M" />
+              </div>
+            </>
           ) : isPaid ? (
             <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-full bg-primary/10">
               <CheckCircle2 className="h-12 w-12 text-primary" />
@@ -1507,29 +1840,33 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
             </div>
           )}
 
-          <div>
-            <p className="text-xl font-bold">{displayUsd(payment.amountUsd)}</p>
-            <p className="text-sm text-muted-foreground">{khr(payment.amountKhr)}</p>
-          </div>
+          {!isPaid && !isExpired && !showQr ? null : (
+            <div>
+              <p className="text-xl font-bold">{displayUsd(payment.amountUsd)}</p>
+              <p className="text-sm text-muted-foreground">{khr(payment.amountKhr)}</p>
+            </div>
+          )}
 
-          <div className={cn(
-            "rounded-xl px-4 py-3 text-sm font-medium",
-            isPaid
-              ? "bg-primary/10 text-primary"
-              : isExpired
-              ? "bg-destructive/10 text-destructive"
-              : "bg-muted text-muted-foreground"
-          )}>
-            {isPaid
-              ? t("paymentConfirmed")
-              : isExpired
-              ? t("qrExpired")
-              : (
-                <span className="flex items-center justify-center gap-2">
-                  <Clock className="h-4 w-4" />
-                  {t("expiresIn")} {formatDuration(secondsRemaining)}
-                </span>
-              )}
+          <div
+            className={cn(
+              'rounded-xl px-4 py-3 text-sm font-medium',
+              isPaid
+                ? 'bg-primary/10 text-primary'
+                : isExpired
+                  ? 'bg-destructive/10 text-destructive'
+                  : 'bg-muted text-muted-foreground'
+            )}
+          >
+            {isPaid ? (
+              t('paymentConfirmed')
+            ) : isExpired ? (
+              t('qrExpired')
+            ) : (
+              <span className="flex items-center justify-center gap-2">
+                <Clock className="h-4 w-4" />
+                {t('expiresIn')} {formatDuration(secondsRemaining)}
+              </span>
+            )}
           </div>
 
           {isPaid ? (
@@ -1538,30 +1875,65 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
               target="_blank"
               className="flex items-center justify-center gap-1.5 text-sm font-semibold text-primary hover:underline"
             >
-              {t("downloadReceipt")} <ChevronRight className="h-4 w-4" />
+              {t('downloadReceipt')} <ChevronRight className="h-4 w-4" />
             </a>
-          ) : !isExpired ? (
+          ) : !isExpired && showQr ? (
             <div className="grid gap-2 sm:grid-cols-2">
-              <Button type="button" variant="outline" className="h-10 rounded-xl text-sm" onClick={() => downloadPaymentQrImage(order, payment)}>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl text-sm"
+                onClick={() => downloadPaymentQrImage(order, payment)}
+              >
                 <Download className="h-4 w-4" />
-                {t("saveImage")}
+                {t('saveImage')}
               </Button>
-              <Button type="button" variant="outline" className="h-10 rounded-xl text-sm" onClick={onRefresh}>
-                {t("checkPaymentStatus")}
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl text-sm"
+                onClick={onRefresh}
+              >
+                {t('checkPaymentStatus')}
               </Button>
-              <Button type="button" variant="outline" className="h-10 rounded-xl text-sm sm:col-span-2" onClick={onCancel}>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl text-sm sm:col-span-2"
+                onClick={onCancel}
+              >
                 <X className="h-4 w-4" />
-                {t("cancelPayment")}
+                {t('cancelPayment')}
               </Button>
             </div>
+          ) : !isExpired ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="h-10 w-full rounded-xl text-sm"
+              onClick={onCancel}
+            >
+              <X className="h-4 w-4" />
+              {t('cancelPayment')}
+            </Button>
           ) : (
             <div className="grid gap-2 sm:grid-cols-2">
-              <Button type="button" variant="outline" className="h-10 rounded-xl text-sm" onClick={onRefresh}>
-                {t("checkPaymentStatus")}
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl text-sm"
+                onClick={onRefresh}
+              >
+                {t('checkPaymentStatus')}
               </Button>
-              <Button type="button" variant="outline" className="h-10 rounded-xl text-sm" onClick={onCancel}>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl text-sm"
+                onClick={onCancel}
+              >
                 <X className="h-4 w-4" />
-                {t("cancelPayment")}
+                {t('cancelPayment')}
               </Button>
             </div>
           )}
@@ -1571,19 +1943,110 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
   );
 }
 
+function PaymentOptionsStep({
+  payment,
+  apps,
+  selectedPaymentAppId,
+  openingPaymentApp,
+  fallbackMessage,
+  onSelectPaymentApp,
+  onOpenPaymentApp,
+  onShowQr,
+}) {
+  const { t } = useLanguage();
+  const selectedApp = apps.find((app) => app.id === selectedPaymentAppId) || apps[0];
+
+  return (
+    <div className="space-y-4 text-left">
+      <div className="rounded-xl border border-border bg-muted/40 px-4 py-3 text-center">
+        <p className="text-xs font-medium text-muted-foreground">{t('amountToPay')}</p>
+        <p className="mt-1 text-2xl font-bold">{displayUsd(payment.amountUsd)}</p>
+        <p className="text-sm text-muted-foreground">{khr(payment.amountKhr)}</p>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase text-muted-foreground">{t('chooseBankApp')}</p>
+        <div className="grid gap-2">
+          {apps.map((app) => {
+            const Logo = app.Logo;
+            const selected = selectedPaymentAppId === app.id;
+            return (
+              <label
+                key={app.id}
+                className={cn(
+                  'flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 transition',
+                  selected
+                    ? 'border-primary bg-primary/8 ring-1 ring-primary/30'
+                    : 'border-border bg-card hover:border-primary/50'
+                )}
+              >
+                <input
+                  type="radio"
+                  name="payment-app"
+                  value={app.id}
+                  checked={selected}
+                  onChange={() => onSelectPaymentApp(app.id)}
+                  className="h-4 w-4 accent-primary"
+                />
+                <Logo className="h-9 w-9" />
+                <span className="text-sm font-semibold">{app.name}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Button
+          type="button"
+          className="h-24 flex-col gap-2 rounded-xl text-sm font-semibold"
+          disabled={openingPaymentApp}
+          onClick={onOpenPaymentApp}
+        >
+          <Smartphone className="h-7 w-7" />
+          {openingPaymentApp
+            ? t('openingBank')
+            : `${t('openBankApp')} ${selectedApp?.name || ''}`}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className="h-24 flex-col gap-2 rounded-xl text-sm font-semibold"
+          onClick={onShowQr}
+        >
+          <QrCode className="h-7 w-7" />
+          {t('scanQrCode')}
+        </Button>
+      </div>
+
+      {fallbackMessage ? (
+        <div className="rounded-xl border border-secondary/30 bg-secondary/10 px-3 py-2 text-center text-xs font-medium text-secondary-foreground">
+          {fallbackMessage}
+        </div>
+      ) : null}
+
+    </div>
+  );
+}
+
 /* ── CustomizeItem ────────────────────────────────────────── */
 function CustomizeItem({ item, addons, options, onClose, onAdd }) {
   const { t } = useLanguage();
   const [quantity, setQuantity] = useState(1);
-  const [spiceLevel, setSpiceLevel] = useState("NORMAL");
+  const [spiceLevel, setSpiceLevel] = useState('NORMAL');
   const [selectedOptions, setSelectedOptions] = useState([]);
   const [selectedAddons, setSelectedAddons] = useState([]);
-  const [specialInstructions, setSpecialInstructions] = useState("");
+  const [specialInstructions, setSpecialInstructions] = useState('');
 
-  const unitUsd = Number(item.priceUsd || 0) + selectedOptions.reduce((sum, o) => sum + Number(o.priceUsd || 0), 0);
-  const addonTotalUsd = selectedAddons.reduce((sum, a) => sum + Number(a.priceUsd || 0) * a.quantity, 0);
+  const unitUsd =
+    Number(item.priceUsd || 0) +
+    selectedOptions.reduce((sum, o) => sum + Number(o.priceUsd || 0), 0);
+  const addonTotalUsd = selectedAddons.reduce(
+    (sum, a) => sum + Number(a.priceUsd || 0) * a.quantity,
+    0
+  );
   const lineUsd = unitUsd * quantity + addonTotalUsd * quantity;
-  const optionGroups = groupBy(options, "optionGroup");
+  const optionGroups = groupBy(options, 'optionGroup');
 
   function toggleAddon(addon) {
     setSelectedAddons((curr) =>
@@ -1598,7 +2061,7 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
       ...curr.filter((e) => e.optionGroup !== option.optionGroup),
       option,
     ]);
-    if (option.optionGroup?.toLowerCase() === "spice") {
+    if (option.optionGroup?.toLowerCase() === 'spice') {
       setSpiceLevel(option.optionName.toUpperCase());
     }
   }
@@ -1633,29 +2096,35 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
         <div className="space-y-5 p-4">
           {Object.entries(optionGroups).map(([group, entries]) => (
             <div key={group}>
-              <h3 className="mb-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">{group}</h3>
+              <h3 className="mb-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                {group}
+              </h3>
               <div className="grid gap-2">
                 {entries.map((option) => (
                   <label
                     key={option.id}
                     className={cn(
-                      "flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-colors",
+                      'flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-colors',
                       selectedOptions.some((e) => e.id === option.id)
-                        ? "border-primary/40 bg-primary/6"
-                        : "border-border hover:border-border/80 hover:bg-muted/40"
+                        ? 'border-primary/40 bg-primary/6'
+                        : 'border-border hover:border-border/80 hover:bg-muted/40'
                     )}
                   >
                     <span className="text-sm font-medium">{option.optionName}</span>
                     <span className="flex items-center gap-3">
                       {option.priceUsd && Number(option.priceUsd) > 0 ? (
-                        <span className="text-xs text-muted-foreground">+{usd(option.priceUsd)}</span>
+                        <span className="text-xs text-muted-foreground">
+                          +{usd(option.priceUsd)}
+                        </span>
                       ) : null}
-                      <div className={cn(
-                        "flex h-4 w-4 items-center justify-center rounded-full border-2 transition-colors",
-                        selectedOptions.some((e) => e.id === option.id)
-                          ? "border-primary bg-primary"
-                          : "border-border"
-                      )}>
+                      <div
+                        className={cn(
+                          'flex h-4 w-4 items-center justify-center rounded-full border-2 transition-colors',
+                          selectedOptions.some((e) => e.id === option.id)
+                            ? 'border-primary bg-primary'
+                            : 'border-border'
+                        )}
+                      >
                         {selectedOptions.some((e) => e.id === option.id) ? (
                           <div className="h-1.5 w-1.5 rounded-full bg-primary-foreground" />
                         ) : null}
@@ -1676,7 +2145,9 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
 
           {addons.length ? (
             <div>
-              <h3 className="mb-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">Add-ons</h3>
+              <h3 className="mb-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                Add-ons
+              </h3>
               <div className="grid gap-2">
                 {addons.map((addon) => {
                   const checked = selectedAddons.some((e) => e.id === addon.id);
@@ -1684,20 +2155,33 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
                     <label
                       key={addon.id}
                       className={cn(
-                        "flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-colors",
-                        checked ? "border-primary/40 bg-primary/6" : "border-border hover:bg-muted/40"
+                        'flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-colors',
+                        checked
+                          ? 'border-primary/40 bg-primary/6'
+                          : 'border-border hover:bg-muted/40'
                       )}
                     >
                       <span className="text-sm font-medium">{addon.name}</span>
                       <span className="flex items-center gap-3">
-                        <span className="text-xs text-muted-foreground">+{usd(addon.priceUsd)}</span>
-                        <div className={cn(
-                          "flex h-4 w-4 items-center justify-center rounded border-2 transition-colors",
-                          checked ? "border-primary bg-primary" : "border-border"
-                        )}>
-                          {checked ? <div className="h-2 w-2 rounded-sm bg-primary-foreground" /> : null}
+                        <span className="text-xs text-muted-foreground">
+                          +{usd(addon.priceUsd)}
+                        </span>
+                        <div
+                          className={cn(
+                            'flex h-4 w-4 items-center justify-center rounded border-2 transition-colors',
+                            checked ? 'border-primary bg-primary' : 'border-border'
+                          )}
+                        >
+                          {checked ? (
+                            <div className="h-2 w-2 rounded-sm bg-primary-foreground" />
+                          ) : null}
                         </div>
-                        <input type="checkbox" checked={checked} onChange={() => toggleAddon(addon)} className="sr-only" />
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleAddon(addon)}
+                          className="sr-only"
+                        />
                       </span>
                     </label>
                   );
@@ -1708,7 +2192,7 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
 
           <div>
             <h3 className="mb-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              {t("specialInstructions")}
+              {t('specialInstructions')}
             </h3>
             <Textarea
               value={specialInstructions}
@@ -1748,7 +2232,7 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
         {/* Footer actions */}
         <div className="flex gap-2.5 border-t border-border/60 p-4">
           <Button variant="outline" className="h-11 flex-1 rounded-xl" onClick={onClose}>
-            {t("cancel")}
+            {t('cancel')}
           </Button>
           <Button
             className="h-11 flex-1 rounded-xl font-semibold shadow-sm"
@@ -1766,7 +2250,7 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
               })
             }
           >
-            {t("addToCart")} · {usd(lineUsd)}
+            {t('addToCart')} · {usd(lineUsd)}
           </Button>
         </div>
       </div>
@@ -1780,7 +2264,7 @@ function customerStorageKey(tableNumber, bucket) {
 }
 
 function readCustomerStorage(key, fallback) {
-  if (typeof window === "undefined") return fallback;
+  if (typeof window === 'undefined') return fallback;
   try {
     const raw = window.localStorage.getItem(key);
     if (!raw) return fallback;
@@ -1797,12 +2281,15 @@ function readCustomerStorage(key, fallback) {
 }
 
 function writeCustomerStorage(key, value) {
-  if (typeof window === "undefined") return;
+  if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(key, JSON.stringify({
-      expiresAt: Date.now() + CUSTOMER_STORAGE_TTL_MS,
-      value,
-    }));
+    window.localStorage.setItem(
+      key,
+      JSON.stringify({
+        expiresAt: Date.now() + CUSTOMER_STORAGE_TTL_MS,
+        value,
+      })
+    );
   } catch {
     // Local storage can be blocked by the browser. The app should still work.
   }
@@ -1827,42 +2314,45 @@ function groupBy(items, key) {
 function priceMatches(item, filter) {
   const price = Number(item.priceUsd || 0);
   switch (filter) {
-    case "under_3": return price < 3;
-    case "3_5": return price >= 3 && price <= 5;
-    case "5_10": return price > 5 && price <= 10;
-    case "10_plus": return price > 10;
-    default: return true;
+    case 'under_3':
+      return price < 3;
+    case '3_5':
+      return price >= 3 && price <= 5;
+    case '5_10':
+      return price > 5 && price <= 10;
+    case '10_plus':
+      return price > 10;
+    default:
+      return true;
   }
 }
 
 function customerTableLabel(table, tableNumber, t) {
-  const label = String(table?.label || "").trim();
-  if (label && label !== "undefined" && label !== "null") return label;
+  const label = String(table?.label || '').trim();
+  if (label && label !== 'undefined' && label !== 'null') return label;
   const fromTable = table?.tableNumber;
-  let fallback = String(tableNumber || "").trim();
+  let fallback = String(tableNumber || '').trim();
   try {
     fallback = decodeURIComponent(fallback);
   } catch {
     // Keep the raw route value if it is not URI-encoded cleanly.
   }
   const value = String(fromTable || fallback).trim();
-  if (!value || value === "undefined" || value === "null") return "";
-  return value.toLowerCase().startsWith("table ") ? value : `${t("table")} ${value}`;
+  if (!value || value === 'undefined' || value === 'null') return '';
+  return value.toLowerCase().startsWith('table ') ? value : `${t('table')} ${value}`;
 }
 
 function customerStatusStepIndex(status) {
   switch (status) {
-    case "PENDING_PAYMENT":
+    case 'PENDING_PAYMENT':
       return 0;
-    case "PAID":
-    case "RECEIVED":
+    case 'PAID':
+    case 'RECEIVED':
       return 1;
-    case "PREPARING":
+    case 'PREPARING':
       return 2;
-    case "READY":
+    case 'COMPLETED':
       return 3;
-    case "COMPLETED":
-      return 4;
     default:
       return -1;
   }
@@ -1870,36 +2360,34 @@ function customerStatusStepIndex(status) {
 
 function customerStatusLabel(status, t) {
   switch (status) {
-    case "PENDING_PAYMENT":
-      return t("awaitingPayment");
-    case "PAID":
-    case "RECEIVED":
-      return t("receivedByStaff");
-    case "PREPARING":
-      return t("acceptedPreparing");
-    case "READY":
-      return t("readyForPickup");
-    case "COMPLETED":
-      return t("orderComplete");
-    case "CANCELLED":
-      return t("cancelled");
-    case "REJECTED":
-      return t("rejected");
-    case "EXPIRED":
-      return t("expired");
+    case 'PENDING_PAYMENT':
+      return t('awaitingPayment');
+    case 'PAID':
+    case 'RECEIVED':
+      return t('receivedByStaff');
+    case 'PREPARING':
+      return t('acceptedPreparing');
+    case 'COMPLETED':
+      return t('orderComplete');
+    case 'CANCELLED':
+      return t('cancelled');
+    case 'REJECTED':
+      return t('rejected');
+    case 'EXPIRED':
+      return t('expired');
     default:
-      return status || "-";
+      return status || '-';
   }
 }
 
 function isPromoCodeError(error, promoCode) {
   if (!promoCode?.trim()) return false;
-  const text = String(error?.message || "").toLowerCase();
-  return text.includes("promo") || text.includes("bad request") || text.includes("400");
+  const text = String(error?.message || '').toLowerCase();
+  return text.includes('promo') || text.includes('bad request') || text.includes('400');
 }
 
 function canRequestStaffAlert(order, now = Date.now(), options = {}) {
-  if (!["PAID", "RECEIVED", "PREPARING"].includes(order?.status)) return false;
+  if (!['PAID', 'RECEIVED', 'PREPARING'].includes(order?.status)) return false;
   if (options.ignoreAge) return true;
   const baseValue = order.paidAt || order.createdAt;
   const baseTime = new Date(baseValue).getTime();
@@ -1914,22 +2402,29 @@ function paidWaitingMinutes(order, payment, now = Date.now()) {
   return Math.max(0, Math.floor((now - baseTime) / 60000));
 }
 
+function buildPaymentAppDeepLink(app, payment) {
+  const data = encodeURIComponent(payment?.khqrString || '');
+  const separator = app.deepLink.includes('?') ? '&' : '?';
+  return `${app.deepLink}${separator}data=${data}`;
+}
+
 function promoDiscountForSubtotal(promo, subtotalUsd) {
   if (!promo) return 0;
   const subtotal = Number(subtotalUsd || 0);
   const value = Number(promo.discountValue || 0);
-  const rawDiscount = promo.discountType === "PERCENT" ? subtotal * (value / 100) : value;
-  const cappedDiscount = promo.discountType === "PERCENT" && promo.maxDiscountUsd != null
-    ? Math.min(rawDiscount, Number(promo.maxDiscountUsd || 0))
-    : rawDiscount;
+  const rawDiscount = promo.discountType === 'PERCENT' ? subtotal * (value / 100) : value;
+  const cappedDiscount =
+    promo.discountType === 'PERCENT' && promo.maxDiscountUsd != null
+      ? Math.min(rawDiscount, Number(promo.maxDiscountUsd || 0))
+      : rawDiscount;
   const maxDiscount = subtotal > 0 ? Math.max(0, subtotal - MIN_CART_TOTAL_USD) : subtotal;
   return Math.min(maxDiscount, Math.max(0, Number(cappedDiscount.toFixed(2))));
 }
 
 function formatPromoValue(promo) {
-  if (!promo) return "";
-  if (promo.discountType === "PERCENT") {
-    const maxDiscount = promo.maxDiscountUsd == null ? "" : `, max ${usd(promo.maxDiscountUsd)}`;
+  if (!promo) return '';
+  if (promo.discountType === 'PERCENT') {
+    const maxDiscount = promo.maxDiscountUsd == null ? '' : `, max ${usd(promo.maxDiscountUsd)}`;
     return `${Number(promo.discountValue || 0).toFixed(2)}% off${maxDiscount}`;
   }
   return `${usd(promo.discountValue)} off`;
@@ -1940,56 +2435,60 @@ function downloadPaymentQrImage(order, payment) {
   if (!svg) return;
 
   const svgText = new XMLSerializer().serializeToString(svg);
-  const svgUrl = URL.createObjectURL(new Blob([svgText], { type: "image/svg+xml;charset=utf-8" }));
-  Promise.all([
-    loadCanvasImage(svgUrl),
-    loadCanvasImage("/logo.png").catch(() => null)
-  ]).then(([qrImage, logoImage]) => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 400;
-    canvas.height = 500;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      URL.revokeObjectURL(svgUrl);
-      return;
-    }
+  const svgUrl = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }));
+  Promise.all([loadCanvasImage(svgUrl), loadCanvasImage('/logo.png').catch(() => null)])
+    .then(([qrImage, logoImage]) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 400;
+      canvas.height = 500;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        URL.revokeObjectURL(svgUrl);
+        return;
+      }
 
-    const tableText = order?.tableNumber ? `Table ${order.tableNumber}` : "";
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const tableText = order?.tableNumber ? `Table ${order.tableNumber}` : '';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    if (logoImage) {
-      ctx.drawImage(logoImage, canvas.width / 2 - 28, 24, 56, 56);
-    }
+      if (logoImage) {
+        ctx.drawImage(logoImage, canvas.width / 2 - 28, 24, 56, 56);
+      }
 
-    ctx.fillStyle = "#111827";
-    ctx.font = "700 20px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("HappyBoat KHQR", canvas.width / 2, logoImage ? 105 : 44);
+      ctx.fillStyle = '#111827';
+      ctx.font = '700 20px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('HappyBoat KHQR', canvas.width / 2, logoImage ? 105 : 44);
 
-    ctx.font = "500 13px sans-serif";
-    ctx.fillStyle = "#4b5563";
-    ctx.fillText(
-      [tableText, order?.orderNumber || "Order", payment.paymentNumber].filter(Boolean).join(" · "),
-      canvas.width / 2,
-      logoImage ? 130 : 69
-    );
+      ctx.font = '500 13px sans-serif';
+      ctx.fillStyle = '#4b5563';
+      ctx.fillText(
+        [tableText, order?.orderNumber || 'Order', payment.paymentNumber]
+          .filter(Boolean)
+          .join(' · '),
+        canvas.width / 2,
+        logoImage ? 130 : 69
+      );
 
-    ctx.drawImage(qrImage, 76, 154, 248, 248);
+      ctx.drawImage(qrImage, 76, 154, 248, 248);
 
-    ctx.font = "700 18px sans-serif";
-    ctx.fillStyle = "#111827";
-    ctx.fillText(displayUsd(payment.amountUsd), canvas.width / 2, 430);
-    ctx.font = "500 13px sans-serif";
-    ctx.fillStyle = "#4b5563";
-    ctx.fillText(khr(payment.amountKhr), canvas.width / 2, 454);
+      ctx.font = '700 18px sans-serif';
+      ctx.fillStyle = '#111827';
+      ctx.fillText(displayUsd(payment.amountUsd), canvas.width / 2, 430);
+      ctx.font = '500 13px sans-serif';
+      ctx.fillStyle = '#4b5563';
+      ctx.fillText(khr(payment.amountKhr), canvas.width / 2, 454);
 
-    canvas.toBlob(async (blob) => {
-      URL.revokeObjectURL(svgUrl);
-      if (!blob) return;
-      await saveImageToPhonePhotos(blob, `${order?.orderNumber || payment.paymentNumber}-khqr.png`);
-    }, "image/png");
-  }).catch(() => URL.revokeObjectURL(svgUrl));
+      canvas.toBlob(async (blob) => {
+        URL.revokeObjectURL(svgUrl);
+        if (!blob) return;
+        await saveImageToPhonePhotos(
+          blob,
+          `${order?.orderNumber || payment.paymentNumber}-khqr.png`
+        );
+      }, 'image/png');
+    })
+    .catch(() => URL.revokeObjectURL(svgUrl));
 }
 
 function loadCanvasImage(src) {
@@ -2002,13 +2501,13 @@ function loadCanvasImage(src) {
 }
 
 async function saveImageToPhonePhotos(blob, filename) {
-  const file = new File([blob], filename, { type: "image/png" });
+  const file = new File([blob], filename, { type: 'image/png' });
   if (navigator.canShare?.({ files: [file] })) {
     try {
       await navigator.share({
         files: [file],
-        title: "HappyBoat KHQR",
-        text: "Save this KHQR image to Photos."
+        title: 'HappyBoat KHQR',
+        text: 'Save this KHQR image to Photos.',
       });
       return;
     } catch {
@@ -2017,7 +2516,7 @@ async function saveImageToPhonePhotos(blob, filename) {
   }
 
   const pngUrl = URL.createObjectURL(blob);
-  const link = document.createElement("a");
+  const link = document.createElement('a');
   link.href = pngUrl;
   link.download = filename;
   link.click();
@@ -2026,15 +2525,15 @@ async function saveImageToPhonePhotos(blob, filename) {
 
 function formatDuration(seconds) {
   const s = Math.max(0, Number(seconds) || 0);
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 function displayImageUrl(url) {
-  if (!url) return "/logo.png";
-  return String(url).replace(/^http:\/\/minio:9000/i, "http://localhost:9000");
+  if (!url) return '/logo.png';
+  return String(url).replace(/^http:\/\/minio:9000/i, 'http://localhost:9000');
 }
 
 function replaceBrokenImage(event) {
-  if (event.currentTarget.src.endsWith("/logo.png")) return;
-  event.currentTarget.src = "/logo.png";
+  if (event.currentTarget.src.endsWith('/logo.png')) return;
+  event.currentTarget.src = '/logo.png';
 }
