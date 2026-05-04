@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { Download, RefreshCw, X } from "lucide-react";
+import { useLanguage } from "@/components/language-provider";
 import { Button } from "@/components/ui/button";
 
 export function PwaController() {
+  const { t } = useLanguage();
   const [installPrompt, setInstallPrompt] = useState(null);
   const [waitingWorker, setWaitingWorker] = useState(null);
   const [installed, setInstalled] = useState(false);
@@ -92,31 +94,31 @@ export function PwaController() {
       {waitingWorker ? (
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-semibold">Update available</div>
-            <div className="text-xs text-muted-foreground">Refresh to use the latest HappyBoat app.</div>
+            <div className="text-sm font-semibold">{t("updateAvailable")}</div>
+            <div className="text-xs text-muted-foreground">{t("refreshLatestApp")}</div>
           </div>
           <Button size="sm" onClick={updateApp}>
             <RefreshCw className="h-4 w-4" />
-            Update
+            {t("update")}
           </Button>
         </div>
       ) : installed ? (
-        <div className="text-sm font-semibold">HappyBoat installed</div>
+        <div className="text-sm font-semibold">{t("installedHappyBoat")}</div>
       ) : (
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-semibold">Install HappyBoat</div>
-            <div className="text-xs text-muted-foreground">Add it to your phone for a faster app experience.</div>
+            <div className="text-sm font-semibold">{t("installHappyBoat")}</div>
+            <div className="text-xs text-muted-foreground">{t("installPhonePrompt")}</div>
           </div>
           <Button size="sm" onClick={installApp}>
             <Download className="h-4 w-4" />
-            Install
+            {t("install")}
           </Button>
           <button
             type="button"
             className="rounded-md p-1 text-muted-foreground hover:text-foreground"
             onClick={() => setInstallPrompt(null)}
-            aria-label="Dismiss install prompt"
+            aria-label={t("dismissInstallPrompt")}
           >
             <X className="h-4 w-4" />
           </button>

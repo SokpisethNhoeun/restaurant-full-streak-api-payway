@@ -10,6 +10,7 @@ import { API_BASE, WS_URL, api } from '@/lib/api';
 import { goeyToastOptions } from '@/lib/goey-toast-options';
 import { displayUsd, khr, tags, usd } from '@/lib/utils';
 import { Client } from '@stomp/stompjs';
+import { Switch as HeroSwitch } from '@heroui/react';
 import { gooeyToast } from 'goey-toast';
 import {
   ArrowUpDown,
@@ -19,17 +20,21 @@ import {
   CalendarDays,
   Check,
   ChefHat,
+  ChevronDown,
+  ChevronUp,
   Clock,
   CreditCard,
   Download,
   Filter,
   LogIn,
   Pencil,
+  Plus,
   Printer,
   RefreshCw,
   Search,
   Table2,
   Upload,
+  Users,
   Utensils,
   Volume2,
   VolumeX,
@@ -87,6 +92,8 @@ const DASHBOARD_SOUND_READY_KEY = 'happyboat-dashboard-sound-ready';
 const DASHBOARD_LANGUAGE_KEY = 'happyboat-language';
 const ORDER_ATTENTION_MS = 10 * 60 * 1000;
 const DONUT_COLORS = ['#0f8a7f', '#f59e0b', '#2563eb', '#dc2626', '#7c3aed', '#059669'];
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+const ALLOWED_UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
 function readDashboardToken() {
   if (typeof window === 'undefined') return null;
@@ -106,9 +113,16 @@ function clearDashboardSession() {
 }
 
 export default function DashboardApp() {
-  const { t, language } = useLanguage();
-  const [credentials, setCredentials] = useState({ username: 'admin', password: 'admin123' });
+  const { t } = useLanguage();
+  const [credentials, setCredentials] = useState({ username: '', password: '' });
+  const [otpSession, setOtpSession] = useState(null);
+  const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
+  const [otpError, setOtpError] = useState('');
+  const [otpNow, setOtpNow] = useState(Date.now());
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  const [otpResending, setOtpResending] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
+  const [userRole, setUserRole] = useState(null);
   const [tab, setTab] = useState('orders');
   const [orders, setOrders] = useState([]);
   const [kitchenItems, setKitchenItems] = useState([]);
@@ -133,6 +147,8 @@ export default function DashboardApp() {
   const notifiedOrderToastRef = useRef(new Set());
   const notifiedPaymentToastRef = useRef(new Set());
   const notifiedCustomerAlertRef = useRef(new Set());
+  const otpInputRefs = useRef([]);
+  const otpAutoSubmitRef = useRef('');
 
   useEffect(() => {
     ordersRef.current = orders;
@@ -159,7 +175,15 @@ export default function DashboardApp() {
     })
       .then((response) => {
         if (!response.ok) throw new Error('No dashboard session');
-        if (mounted) setSignedIn(true);
+        return response.json();
+      })
+      .then((data) => {
+        if (mounted) {
+          setSignedIn(true);
+          if (data?.role) {
+            setUserRole(data.role);
+          }
+        }
       })
       .catch(() => {
         clearDashboardSession();
@@ -223,6 +247,13 @@ export default function DashboardApp() {
     return () => window.clearInterval(timer);
   }, [signedIn]);
 
+  useEffect(() => {
+    if (!otpSession) return undefined;
+    setOtpNow(Date.now());
+    const timer = window.setInterval(() => setOtpNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [otpSession]);
+
   async function request(path, options = {}) {
     try {
       return await api(path, {
@@ -243,23 +274,123 @@ export default function DashboardApp() {
   async function signIn(event) {
     event.preventDefault();
     setMessage('');
+    setOtpError('');
     unlockSound();
     try {
-      const session = await api('/api/admin/auth/login', {
+      const challenge = await api('/api/admin/auth/login', {
         method: 'POST',
         credentials: 'include',
         body: JSON.stringify(credentials),
       });
-      if (session?.token) {
-        window.localStorage.setItem(DASHBOARD_TOKEN_KEY, session.token);
+      if (challenge?.otpRequired) {
+        startOtpSession(challenge, credentials.username);
+        setCredentials((current) => ({ ...current, password: '' }));
+        return;
       }
-      gooeyToast.success(t('loginSuccess'), goeyToastOptions());
-      window.localStorage.setItem(DASHBOARD_SESSION_HINT, '1');
-      setCredentials((current) => ({ ...current, password: '' }));
-      setSignedIn(true);
     } catch {
       clearDashboardSession();
       setMessage(t('signInFailed'));
+    }
+  }
+
+  function startOtpSession(challenge, username) {
+    const now = Date.now();
+    setOtpSession({
+      sessionToken: challenge.sessionToken,
+      maskedEmail: challenge.maskedEmail || maskEmail(username),
+      expiresAt: now + Number(challenge.expiresInSeconds || 120) * 1000,
+      resendAt: now + Number(challenge.resendAvailableInSeconds || 30) * 1000,
+    });
+    setOtpDigits(['', '', '', '', '', '']);
+    otpAutoSubmitRef.current = '';
+    setOtpError('');
+    window.setTimeout(() => otpInputRefs.current[0]?.focus(), 50);
+  }
+
+  function finishSignIn(session) {
+    if (session?.token) {
+      window.localStorage.setItem(DASHBOARD_TOKEN_KEY, session.token);
+    }
+    if (session?.role) {
+      setUserRole(session.role);
+    }
+    gooeyToast.success(t('loginSuccess'), goeyToastOptions());
+    window.localStorage.setItem(DASHBOARD_SESSION_HINT, '1');
+    setCredentials({ username: '', password: '' });
+    setOtpSession(null);
+    setOtpDigits(['', '', '', '', '', '']);
+    otpAutoSubmitRef.current = '';
+    setSignedIn(true);
+  }
+
+  async function verifyOtp(event) {
+    event?.preventDefault();
+    if (!otpSession || otpVerifying) return;
+    setOtpError('');
+    setOtpVerifying(true);
+    try {
+      const session = await api('/api/admin/auth/verify-otp', {
+        method: 'POST',
+        credentials: 'include',
+        body: JSON.stringify({
+          sessionToken: otpSession.sessionToken,
+          otp: otpDigits.join(''),
+        }),
+      });
+      finishSignIn(session);
+    } catch (error) {
+      setOtpError(error.message || t('signInFailed'));
+    } finally {
+      setOtpVerifying(false);
+    }
+  }
+
+  async function resendOtp() {
+    if (!otpSession || otpResending || Date.now() < otpSession.resendAt) return;
+    setOtpError('');
+    setOtpResending(true);
+    try {
+      const challenge = await api('/api/admin/auth/resend-otp', {
+        method: 'POST',
+        credentials: 'include',
+        body: JSON.stringify({ sessionToken: otpSession.sessionToken }),
+      });
+      startOtpSession(challenge, otpSession.maskedEmail);
+    } catch (error) {
+      setOtpError(error.message || t('signInFailed'));
+    } finally {
+      setOtpResending(false);
+    }
+  }
+
+  function updateOtpDigit(index, rawValue) {
+    const digits = rawValue.replace(/\D/g, '');
+    if (digits.length > 1) {
+      pasteOtpDigits(digits);
+      return;
+    }
+    const next = [...otpDigits];
+    next[index] = digits;
+    setOtpDigits(next);
+    if (digits && index < otpDigits.length - 1) {
+      otpInputRefs.current[index + 1]?.focus();
+    }
+  }
+
+  function pasteOtpDigits(rawValue) {
+    const digits = rawValue.replace(/\D/g, '').slice(0, 6).split('');
+    if (!digits.length) return;
+    const next = [...otpDigits];
+    for (let index = 0; index < next.length; index += 1) {
+      next[index] = digits[index] || '';
+    }
+    setOtpDigits(next);
+    otpInputRefs.current[Math.min(digits.length, 6) - 1]?.focus();
+  }
+
+  function handleOtpKeyDown(index, event) {
+    if (event.key === 'Backspace' && !otpDigits[index] && index > 0) {
+      otpInputRefs.current[index - 1]?.focus();
     }
   }
 
@@ -398,6 +529,12 @@ export default function DashboardApp() {
       if (didNotify) playSound('payment');
     }
   }
+  function formatDuration(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(s / 60);
+  const remainingSeconds = s % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`;
+}
 
   function applyLivePayment(payment) {
     const previous = paymentsRef.current.find((entry) => entry.id === payment.id);
@@ -675,6 +812,23 @@ export default function DashboardApp() {
     return true;
   }
 
+  const otpSecondsRemaining = otpSession
+    ? Math.max(0, Math.ceil((otpSession.expiresAt - otpNow) / 1000))
+    : 0;
+  const otpResendRemaining = otpSession
+    ? Math.max(0, Math.ceil((otpSession.resendAt - otpNow) / 1000))
+    : 0;
+  const otpComplete = otpDigits.every(Boolean);
+
+  useEffect(() => {
+    if (!otpSession || !otpComplete || otpVerifying) return;
+    const code = otpDigits.join('');
+    if (code.length !== otpDigits.length || otpAutoSubmitRef.current === code) return;
+    otpAutoSubmitRef.current = code;
+    verifyOtp();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [otpComplete, otpDigits, otpSession, otpVerifying]);
+
   if (!signedIn) {
     return (
       <main className="grid min-h-screen place-items-center bg-background px-4">
@@ -701,12 +855,16 @@ export default function DashboardApp() {
                 value={credentials.username}
                 onChange={(e) => setCredentials({ ...credentials, username: e.target.value })}
                 placeholder={t('username')}
+                autoComplete="username"
+                required
               />
               <Input
                 value={credentials.password}
                 onChange={(e) => setCredentials({ ...credentials, password: e.target.value })}
                 type="password"
                 placeholder={t('password')}
+                autoComplete="current-password"
+                required
               />
               <Button className="w-full">
                 <LogIn className="h-4 w-4" />
@@ -715,6 +873,87 @@ export default function DashboardApp() {
             </form>
           </CardContent>
         </Card>
+        {otpSession ? (
+          <div className="fixed inset-0 z-40 grid place-items-center bg-black/45 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-md rounded-lg border border-border bg-card p-6 shadow-xl">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-semibold">{t('checkYourEmail')}</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {t('otpSubtitle').replace('{email}', otpSession.maskedEmail)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="rounded-md border border-border p-1.5 text-muted-foreground hover:text-foreground"
+                  onClick={() => {
+                    setOtpSession(null);
+                    setOtpError('');
+                    setOtpDigits(['', '', '', '', '', '']);
+                    otpAutoSubmitRef.current = '';
+                  }}
+                  aria-label={t('close')}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <form className="mt-5 space-y-4" onSubmit={verifyOtp}>
+                <div className="grid grid-cols-6 gap-2">
+                  {otpDigits.map((digit, index) => (
+                    <input
+                      key={index}
+                      ref={(node) => {
+                        otpInputRefs.current[index] = node;
+                      }}
+                      value={digit}
+                      onChange={(event) => updateOtpDigit(index, event.target.value)}
+                      onKeyDown={(event) => handleOtpKeyDown(index, event)}
+                      onPaste={(event) => {
+                        event.preventDefault();
+                        pasteOtpDigits(event.clipboardData.getData('text'));
+                      }}
+                      inputMode="numeric"
+                      autoComplete={index === 0 ? 'one-time-code' : 'off'}
+                      maxLength={1}
+                      className="h-12 rounded-md border border-input bg-background px-4 py-2.5 text-center text-xl font-semibold outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                      aria-label={`OTP digit ${index + 1}`}
+                    />
+                  ))}
+                </div>
+
+                <div className="text-center text-sm font-medium text-muted-foreground">
+                  Code expires in {formatDuration(otpSecondsRemaining)}
+                </div>
+
+                {otpError ? (
+                  <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    {otpError}
+                  </div>
+                ) : null}
+
+                {otpVerifying ? (
+                  <div className="rounded-md bg-muted px-3 py-2 text-center text-sm font-medium text-muted-foreground">
+                    {t('checking')}
+                  </div>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={otpResendRemaining > 0 || otpResending}
+                  onClick={resendOtp}
+                >
+                  {otpResendRemaining > 0
+                    ? t('resendIn').replace('{seconds}', otpResendRemaining)
+                    : otpResending
+                      ? t('checking')
+                      : t('resendOtp')}
+                </Button>
+              </form>
+            </div>
+          </div>
+        ) : null}
       </main>
     );
   }
@@ -806,6 +1045,14 @@ export default function DashboardApp() {
             icon={BarChart3}
             label={t('analytics')}
           />
+          {userRole === 'SUPER_ADMIN' ? (
+            <TabButton
+              active={tab === 'accounts'}
+              onClick={() => setTab('accounts')}
+              icon={Users}
+              label="Accounts"
+            />
+          ) : null}
         </div>
 
         {tab === 'orders' ? (
@@ -853,6 +1100,10 @@ export default function DashboardApp() {
             lastUpdatedAt={lastUpdatedAt}
             onRefresh={loadAnalytics}
           />
+        ) : null}
+
+        {tab === 'accounts' && userRole === 'SUPER_ADMIN' ? (
+          <AdminAccountsView request={request} reload={loadAnalytics} />
         ) : null}
       </div>
     </main>
@@ -968,6 +1219,7 @@ function OrdersView({
                 value={sortKey}
                 onChange={(e) => setSortKey(e.target.value)}
                 className="pl-9 text-sm"
+                aria-label={t('sortBy')}
               >
                 {SORT_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -982,6 +1234,7 @@ function OrdersView({
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="pl-9 text-sm"
+                aria-label={t('sortStatus')}
               >
                 {ORDER_STATUS_FILTERS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -996,6 +1249,7 @@ function OrdersView({
                 value={paymentFilter}
                 onChange={(e) => setPaymentFilter(e.target.value)}
                 className="pl-9 text-sm"
+                aria-label={t('sortPayment')}
               >
                 {PAYMENT_FILTERS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -1005,12 +1259,12 @@ function OrdersView({
               </Select>
             </div>
             <div className="relative">
-              <CalendarDays className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 type="date"
                 value={dateFilter}
                 onChange={(e) => setDateFilter(e.target.value)}
-                className="pl-9 text-sm"
+                className="text-sm"
+                aria-label={t('allDates')}
               />
             </div>
           </div>
@@ -1373,6 +1627,7 @@ function KitchenView({
   const [dateFilter, setDateFilter] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [timeFilter, setTimeFilter] = useState('');
+  const [autoAccept, setAutoAccept] = useState(false);
   const categoryOptions = useMemo(() => kitchenCategoryOptions(items), [items]);
   const filteredItems = useMemo(
     () => filterKitchenItems(items, { dateFilter, categoryFilter, timeFilter }, now),
@@ -1380,18 +1635,43 @@ function KitchenView({
   );
   const cards = useMemo(() => groupKitchenCards(filteredItems, statusMap), [filteredItems, statusMap]);
   const updatingItemIdSet = useMemo(() => new Set(updatingItemIds), [updatingItemIds]);
+  useEffect(() => {
+    if (!autoAccept) return;
+    const pendingIds = flattenKitchenItems(items)
+      .filter((row) => (statusMap[row.id] || row.kitchenStatus || 'PENDING') === 'PENDING')
+      .map((row) => row.id);
+    if (pendingIds.length > 0) {
+      onGroupStatus(pendingIds, 'ACCEPTED');
+    }
+  }, [autoAccept, items, onGroupStatus, statusMap]);
   const hasFilters = Boolean(dateFilter || categoryFilter || timeFilter);
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold">{t('kitchen')}</h2>
-          <p className="text-sm text-muted-foreground">{t('kitchenPaidItems')}</p>
-        </div>
-        <Badge tone="primary">{cards.length}</Badge>
-      </div>
-
+<div className="flex flex-wrap items-center justify-between gap-3">
+  <div>
+    <h2 className="text-xl font-semibold">{t('kitchen')}</h2>
+    <p className="text-sm text-muted-foreground">{t('kitchenPaidItems')}</p>
+  </div>
+  <div className="flex items-center gap-3">
+    <Badge tone="primary">{cards.length}</Badge>
+    <HeroSwitch
+      aria-label={autoAccept ? t('autoAcceptOn') : t('manualMode')}
+      classNames={{
+        base: 'h-9 rounded-md border border-border bg-card px-3',
+        wrapper: 'mr-2 h-[18px] w-8 bg-[var(--color-border-secondary)] group-data-[selected=true]:bg-[#0f8a7f]',
+        thumb: 'h-3.5 w-3.5 bg-white',
+        label: 'text-sm font-medium text-foreground',
+      }}
+      color="success"
+      isSelected={autoAccept}
+      onValueChange={setAutoAccept}
+      size="sm"
+    >
+      {autoAccept ? t('autoAcceptOn') : t('manualMode')}
+    </HeroSwitch>
+  </div>
+</div>
       <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
         <Input
           type="date"
@@ -1591,9 +1871,20 @@ function KitchenItemCard({ item, now, onGroupStatus, onItemStatus, updatingItemI
 
 // Menu
 
-function MenuView({ menu, request, reload }) {
-  const { t } = useLanguage();
-  const emptyForm = {
+const DEFAULT_ADDONS = [
+  { name: 'Extra Ice', priceUsd: '0.25', hasQuantity: false, isDefault: false },
+  { name: 'Extra Sauce', priceUsd: '0.50', hasQuantity: false, isDefault: true },
+];
+
+const DEFAULT_SPICE_LEVELS = [
+  { name: 'Normal', priceUsd: '0.00', isDefault: true },
+  { name: 'Medium', priceUsd: '0.00', isDefault: false },
+  { name: 'Hot', priceUsd: '0.25', isDefault: false },
+  { name: 'Extra Hot', priceUsd: '0.50', isDefault: false },
+];
+
+function createMenuForm() {
+  return {
     categoryId: '',
     name: '',
     priceUsd: '',
@@ -1602,22 +1893,253 @@ function MenuView({ menu, request, reload }) {
     imageUrl: '',
     available: true,
     sortOrder: 100,
+    spice: '',
+    addOns: '',
+    isSpiceRequired: false,
+    spiceLevels: DEFAULT_SPICE_LEVELS.map(normalizeSpiceFormEntry),
+    addons: DEFAULT_ADDONS.map(normalizeAddonFormEntry),
   };
-  const [form, setForm] = useState(emptyForm);
+}
+
+function createCategoryForm(category = {}) {
+  return {
+    name: category.name || '',
+    slug: category.slug || '',
+    sortOrder: category.sortOrder ?? 100,
+    active: category.active !== false,
+  };
+}
+
+function slugifyCategoryName(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function normalizeSpiceFormEntry(entry = {}) {
+  return {
+    name: entry.name || entry.optionName || '',
+    priceUsd: String(entry.priceUsd ?? entry.price ?? '0.00'),
+    isDefault: menuFormBoolean(entry.isDefault),
+  };
+}
+
+function normalizeAddonFormEntry(entry = {}) {
+  return {
+    name: entry.name || '',
+    priceUsd: String(entry.priceUsd ?? entry.price ?? '0.00'),
+    hasQuantity: menuFormBoolean(entry.hasQuantity ?? entry.hasQty),
+    isDefault: menuFormBoolean(entry.isDefault),
+  };
+}
+
+function menuFormBoolean(value) {
+  return value === true || value === 'true';
+}
+
+function compactSpiceLevels(spiceLevels = []) {
+  const rows = spiceLevels
+    .map((spice) => ({
+      name: String(spice.name || '').trim(),
+      priceUsd: Number(spice.priceUsd || 0),
+      isDefault: Boolean(spice.isDefault),
+    }))
+    .filter((spice) => spice.name);
+
+  if (rows.length > 0 && !rows.some((spice) => spice.isDefault)) {
+    rows[0].isDefault = true;
+  }
+
+  let defaultAssigned = false;
+  return rows.map((spice) => {
+    const isDefault = spice.isDefault && !defaultAssigned;
+    defaultAssigned = defaultAssigned || isDefault;
+    return { ...spice, isDefault };
+  });
+}
+
+function compactAddons(addons = []) {
+  return addons
+    .map((addon) => ({
+      name: String(addon.name || '').trim(),
+      priceUsd: Number(addon.priceUsd || 0),
+      hasQuantity: Boolean(addon.hasQuantity),
+      isDefault: Boolean(addon.isDefault),
+    }))
+    .filter((addon) => addon.name);
+}
+
+function MenuView({ menu, request, reload }) {
+  const { t } = useLanguage();
+  const [form, setForm] = useState(() => createMenuForm());
+  const [categoryForm, setCategoryForm] = useState(() => createCategoryForm());
   const [editingItem, setEditingItem] = useState(null);
+  const [editingCategory, setEditingCategory] = useState(null);
   const [search, setSearch] = useState('');
   const [message, setMessage] = useState('');
+  const [menuFormOpen, setMenuFormOpen] = useState(false);
+  const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
+  const [categorySlugEdited, setCategorySlugEdited] = useState(false);
+  const [spiceOpen, setSpiceOpen] = useState(true);
+  const [addonsOpen, setAddonsOpen] = useState(true);
+  const [spiceDraft, setSpiceDraft] = useState({ name: '', priceUsd: '' });
+  const [addonDraft, setAddonDraft] = useState({
+    name: '',
+    priceUsd: '',
+    hasQuantity: false,
+  });
+  const dietaryTags = tags(form.dietaryTags);
   const items = menu.items.filter((item) =>
     `${item.name} ${item.description}`.toLowerCase().includes(search.toLowerCase())
   );
+  const categoryItemCounts = useMemo(() => {
+    const counts = {};
+    menu.items.forEach((item) => {
+      if (!item.categoryId) return;
+      counts[item.categoryId] = (counts[item.categoryId] || 0) + 1;
+    });
+    return counts;
+  }, [menu.items]);
 
   function resetForm(nextMessage = '') {
     setEditingItem(null);
-    setForm(emptyForm);
+    setForm(createMenuForm());
+    setMessage(nextMessage);
+    setSpiceDraft({ name: '', priceUsd: '' });
+    setAddonDraft({ name: '', priceUsd: '', hasQuantity: false });
+    setSpiceOpen(true);
+    setAddonsOpen(true);
+    setMenuFormOpen(false);
+  }
+
+  function openNewMenuForm() {
+    setEditingItem(null);
+    setCategoryManagerOpen(false);
+    setForm(createMenuForm());
+    setMessage('');
+    setSpiceDraft({ name: '', priceUsd: '' });
+    setAddonDraft({ name: '', priceUsd: '', hasQuantity: false });
+    setSpiceOpen(true);
+    setAddonsOpen(true);
+    setMenuFormOpen(true);
+  }
+
+  function openCategoryManager() {
+    setMenuFormOpen(false);
+    setEditingCategory(null);
+    setCategoryForm(createCategoryForm());
+    setCategorySlugEdited(false);
+    setMessage('');
+    setCategoryManagerOpen(true);
+  }
+
+  function closeCategoryManager() {
+    setCategoryManagerOpen(false);
+    setEditingCategory(null);
+    setCategoryForm(createCategoryForm());
+    setCategorySlugEdited(false);
+  }
+
+  function editCategory(category) {
+    setEditingCategory(category);
+    setCategoryForm(createCategoryForm(category));
+    setCategorySlugEdited(true);
+    setMessage('');
+  }
+
+  function updateCategoryName(name) {
+    setCategoryForm((current) => ({
+      ...current,
+      name,
+      slug: categorySlugEdited ? current.slug : slugifyCategoryName(name),
+    }));
+  }
+
+  function resetCategoryForm(nextMessage = '') {
+    setEditingCategory(null);
+    setCategoryForm(createCategoryForm());
+    setCategorySlugEdited(false);
     setMessage(nextMessage);
   }
 
+  async function saveCategory(event) {
+    event.preventDefault();
+    setMessage('');
+    const payload = {
+      name: categoryForm.name.trim(),
+      slug: categoryForm.slug.trim(),
+      sortOrder: Number(categoryForm.sortOrder || 0),
+      active: Boolean(categoryForm.active),
+    };
+    try {
+      await request(
+        editingCategory
+          ? `/api/admin/menu/categories/${editingCategory.id}`
+          : '/api/admin/menu/categories',
+        {
+          method: editingCategory ? 'PUT' : 'POST',
+          body: JSON.stringify(payload),
+        }
+      );
+      resetCategoryForm(editingCategory ? t('categoryUpdated') : t('categoryCreated'));
+      reload();
+    } catch (error) {
+      setMessage(formatApiError(error, t('categorySaveFailed')));
+    }
+  }
+
+  async function toggleCategory(category) {
+    setMessage('');
+    try {
+      await request(`/api/admin/menu/categories/${category.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          name: category.name,
+          slug: category.slug,
+          sortOrder: category.sortOrder || 0,
+          active: !category.active,
+        }),
+      });
+      setMessage(t('categoryUpdated'));
+      reload();
+    } catch (error) {
+      setMessage(formatApiError(error, t('categorySaveFailed')));
+    }
+  }
+
+  async function deleteCategory(category) {
+    if (!window.confirm(t('confirmDeleteCategory'))) return;
+    setMessage('');
+    try {
+      await request(`/api/admin/menu/categories/${category.id}`, { method: 'DELETE' });
+      if (editingCategory?.id === category.id) {
+        resetCategoryForm();
+      }
+      setMessage(t('categoryDeleted'));
+      reload();
+    } catch (error) {
+      setMessage(formatApiError(error, t('categoryDeleteFailed')));
+    }
+  }
+
   function editItem(item) {
+    const itemSpiceLevels =
+      Array.isArray(item.spiceLevels) && item.spiceLevels.length
+        ? item.spiceLevels
+        : (menu.spiceLevels || menu.options || []).filter(
+            (option) =>
+              option.menuItemId === item.id &&
+              (option.optionGroup == null || option.optionGroup === 'Spice')
+          );
+    const itemAddons =
+      Array.isArray(item.addons) && item.addons.length
+        ? item.addons
+        : (menu.addons || []).filter((addon) => addon.menuItemId === item.id);
+
     setEditingItem(item);
     setMessage('');
     setForm({
@@ -1629,19 +2151,47 @@ function MenuView({ menu, request, reload }) {
       imageUrl: item.imageUrl || '',
       available: item.available,
       sortOrder: item.sortOrder ?? 100,
+      spice: item.spice || '',
+      addOns: item.addOns || '',
+      isSpiceRequired:
+        Boolean(item.isSpiceRequired) || itemSpiceLevels.some((spice) => Boolean(spice.required)),
+      spiceLevels: itemSpiceLevels.map(normalizeSpiceFormEntry),
+      addons: itemAddons.map(normalizeAddonFormEntry),
     });
+    setSpiceDraft({ name: '', priceUsd: '' });
+    setAddonDraft({ name: '', priceUsd: '', hasQuantity: false });
+    setSpiceOpen(true);
+    setAddonsOpen(true);
+    setMenuFormOpen(true);
   }
 
   async function uploadImage(event) {
     const file = event.target.files?.[0];
     if (!file) return;
+    setMessage('');
+    if (!ALLOWED_UPLOAD_TYPES.includes(file.type)) {
+      setMessage(t('invalidImageType'));
+      event.target.value = '';
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setMessage(t('imageTooLarge'));
+      event.target.value = '';
+      return;
+    }
     const data = new FormData();
     data.append('file', file);
-    const uploaded = await request('/api/admin/uploads/menu-images', {
-      method: 'POST',
-      body: data,
-    });
-    setForm((current) => ({ ...current, imageUrl: uploaded.url }));
+    try {
+      const uploaded = await request('/api/admin/uploads/menu-images', {
+        method: 'POST',
+        body: data,
+      });
+      setForm((current) => ({ ...current, imageUrl: uploaded.url }));
+    } catch (error) {
+      setMessage(formatApiError(error, t('uploadFailed')));
+    } finally {
+      event.target.value = '';
+    }
   }
 
   async function saveItem(event) {
@@ -1653,6 +2203,9 @@ function MenuView({ menu, request, reload }) {
       priceKhr: null,
       available: Boolean(form.available),
       sortOrder: Number(form.sortOrder || 0),
+      isSpiceRequired: Boolean(form.isSpiceRequired),
+      spiceLevels: compactSpiceLevels(form.spiceLevels),
+      addons: compactAddons(form.addons),
     };
     await request(
       editingItem ? `/api/admin/menu/items/${editingItem.id}` : '/api/admin/menu/items',
@@ -1677,31 +2230,243 @@ function MenuView({ menu, request, reload }) {
         imageUrl: item.imageUrl,
         available: !item.available,
         dietaryTags: item.dietaryTags,
+        isSpiceRequired: item.isSpiceRequired,
         sortOrder: item.sortOrder || 0,
       }),
     });
     reload();
   }
 
+  function removeDietaryTag(index) {
+    const next = dietaryTags.filter((_, tagIndex) => tagIndex !== index);
+    setForm({ ...form, dietaryTags: next.join(', ') });
+  }
+
+  function addSpiceLevel() {
+    const name = spiceDraft.name.trim();
+    if (!name) return;
+    setForm((current) => ({
+      ...current,
+      spiceLevels: [
+        ...current.spiceLevels,
+        {
+          name,
+          priceUsd: spiceDraft.priceUsd || '0.00',
+          isDefault: current.spiceLevels.length === 0,
+        },
+      ],
+    }));
+    setSpiceDraft({ name: '', priceUsd: '' });
+  }
+
+  function updateSpiceLevel(index, patch) {
+    setForm((current) => ({
+      ...current,
+      spiceLevels: current.spiceLevels.map((spice, spiceIndex) =>
+        spiceIndex === index ? { ...spice, ...patch } : spice
+      ),
+    }));
+  }
+
+  function setDefaultSpice(index) {
+    setForm((current) => ({
+      ...current,
+      spiceLevels: current.spiceLevels.map((spice, spiceIndex) => ({
+        ...spice,
+        isDefault: spiceIndex === index,
+      })),
+    }));
+  }
+
+  function deleteSpiceLevel(index) {
+    setForm((current) => {
+      const next = current.spiceLevels.filter((_, spiceIndex) => spiceIndex !== index);
+      if (next.length > 0 && !next.some((spice) => spice.isDefault)) {
+        next[0] = { ...next[0], isDefault: true };
+      }
+      return { ...current, spiceLevels: next };
+    });
+  }
+
+  function addAddon() {
+    const name = addonDraft.name.trim();
+    if (!name) return;
+    setForm((current) => ({
+      ...current,
+      addons: [
+        ...current.addons,
+        {
+          name,
+          priceUsd: addonDraft.priceUsd || '0.00',
+          hasQuantity: Boolean(addonDraft.hasQuantity),
+          isDefault: false,
+        },
+      ],
+    }));
+    setAddonDraft({ name: '', priceUsd: '', hasQuantity: false });
+  }
+
+  function updateAddon(index, patch) {
+    setForm((current) => ({
+      ...current,
+      addons: current.addons.map((addon, addonIndex) =>
+        addonIndex === index ? { ...addon, ...patch } : addon
+      ),
+    }));
+  }
+
+  function deleteAddon(index) {
+    setForm((current) => ({
+      ...current,
+      addons: current.addons.filter((_, addonIndex) => addonIndex !== index),
+    }));
+  }
+
   return (
-    <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
-      <Card className="lg:sticky lg:top-24 lg:self-start">
+    <div className="space-y-5">
+      {categoryManagerOpen ? (
+        <div className="fixed inset-0 z-40 flex items-end bg-black/45 px-0 backdrop-blur-sm sm:items-center sm:p-4">
+          <Card className="bottom-sheet-animate max-h-[94vh] w-full overflow-hidden rounded-t-2xl border-border bg-card shadow-xl sm:mx-auto sm:max-w-2xl sm:rounded-lg">
+            <CardHeader className="flex-row items-center justify-between gap-3">
+              <CardTitle>{t('manageCategories')}</CardTitle>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={closeCategoryManager}
+                aria-label={t('close')}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </CardHeader>
+            <CardContent className="max-h-[calc(100vh-9rem)] overflow-auto">
+              {message ? (
+                <div className="mb-3 rounded-md bg-muted px-3 py-2 text-sm">{message}</div>
+              ) : null}
+              <form className="space-y-3 rounded-md border border-border/70 p-3" onSubmit={saveCategory}>
+                <div className="grid gap-2 sm:grid-cols-[1fr_1fr_100px_auto]">
+                  <Input
+                    value={categoryForm.name}
+                    onChange={(e) => updateCategoryName(e.target.value)}
+                    placeholder={t('categoryName')}
+                    required
+                  />
+                  <Input
+                    value={categoryForm.slug}
+                    onChange={(e) => {
+                      setCategorySlugEdited(true);
+                      setCategoryForm({ ...categoryForm, slug: e.target.value });
+                    }}
+                    placeholder={t('categorySlug')}
+                    required
+                  />
+                  <Input
+                    value={categoryForm.sortOrder}
+                    onChange={(e) => setCategoryForm({ ...categoryForm, sortOrder: e.target.value })}
+                    placeholder={t('categoryOrder')}
+                    type="number"
+                    min="0"
+                  />
+                  <label className="flex min-h-10 items-center justify-between gap-2 rounded-md border border-border px-3 text-sm">
+                    {t('active')}
+                    <ToggleSwitch
+                      checked={categoryForm.active}
+                      onChange={(checked) => setCategoryForm({ ...categoryForm, active: checked })}
+                    />
+                  </label>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="submit">
+                    <Check className="h-4 w-4" />
+                    {editingCategory ? t('save') : t('create')}
+                  </Button>
+                  {editingCategory ? (
+                    <Button type="button" variant="outline" onClick={() => resetCategoryForm()}>
+                      {t('cancel')}
+                    </Button>
+                  ) : null}
+                </div>
+              </form>
+
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-semibold">{t('categories')}</h3>
+                  <Badge tone="primary">{menu.categories.length}</Badge>
+                </div>
+                {menu.categories.length === 0 ? (
+                  <p className="rounded-md border border-dashed border-border px-3 py-5 text-center text-sm text-muted-foreground">
+                    {t('noCategoriesYet')}
+                  </p>
+                ) : (
+                  menu.categories.map((category) => {
+                    const itemCount = categoryItemCounts[category.id] || 0;
+                    return (
+                      <div
+                        key={category.id}
+                        className="flex flex-col gap-3 rounded-md border border-border/70 p-3 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium">{category.name}</span>
+                            <Badge tone={category.active ? 'primary' : 'danger'}>
+                              {category.active ? t('active') : t('inactive')}
+                            </Badge>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {category.slug} · {t('categoryOrder')}: {category.sortOrder ?? 0} ·{' '}
+                            {t('categoryItemCount').replace('{count}', itemCount)}
+                          </p>
+                          {itemCount > 0 ? (
+                            <p className="mt-1 text-xs text-muted-foreground">{t('categoryHasItems')}</p>
+                          ) : null}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Button type="button" variant="outline" onClick={() => editCategory(category)}>
+                            <Pencil className="h-4 w-4" />
+                            {t('edit')}
+                          </Button>
+                          <Button type="button" variant="outline" onClick={() => toggleCategory(category)}>
+                            {category.active ? t('disable') : t('enable')}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={itemCount > 0}
+                            title={itemCount > 0 ? t('categoryHasItems') : t('deleteCategory')}
+                            onClick={() => deleteCategory(category)}
+                          >
+                            <X className="h-4 w-4" />
+                            {t('deleteCategory')}
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
+      {menuFormOpen ? (
+        <div className="fixed inset-0 z-40 flex items-end bg-black/45 px-0 backdrop-blur-sm sm:items-center sm:p-4">
+          <Card className="bottom-sheet-animate max-h-[94vh] w-full overflow-hidden rounded-t-2xl border-border bg-card shadow-xl sm:mx-auto sm:max-w-xl sm:rounded-lg">
         <CardHeader className="flex-row items-center justify-between gap-3">
           <CardTitle>{editingItem ? t('editMenuItem') : t('newMenuItem')}</CardTitle>
-          {editingItem ? (
-            <Button type="button" variant="outline" onClick={resetForm}>
-              {t('new')}
-            </Button>
-          ) : null}
+          <Button type="button" variant="outline" size="icon" onClick={() => resetForm()}>
+            <X className="h-4 w-4" />
+          </Button>
         </CardHeader>
         <CardContent className="max-h-[calc(100vh-9rem)] overflow-auto">
           {message ? (
             <div className="mb-3 rounded-md bg-muted px-3 py-2 text-sm">{message}</div>
           ) : null}
+
           <form className="space-y-3" onSubmit={saveItem}>
             <Select
               value={form.categoryId}
               onChange={(e) => setForm({ ...form, categoryId: e.target.value })}
+              aria-label={t('category')}
               required
             >
               <option value="">{t('category')}</option>
@@ -1735,6 +2500,7 @@ function MenuView({ menu, request, reload }) {
             <Select
               value={form.available ? 'true' : 'false'}
               onChange={(e) => setForm({ ...form, available: e.target.value === 'true' })}
+              aria-label={t('available')}
             >
               <option value="true">{t('available')}</option>
               <option value="false">{t('hidden')}</option>
@@ -1749,7 +2515,7 @@ function MenuView({ menu, request, reload }) {
               {t('uploadImage')}
               <input
                 type="file"
-                accept="image/png,image/jpeg,image/webp"
+                accept="image/png,image/jpeg,image/webp,image/gif"
                 className="hidden"
                 onChange={uploadImage}
               />
@@ -1759,38 +2525,236 @@ function MenuView({ menu, request, reload }) {
               onChange={(e) => setForm({ ...form, dietaryTags: e.target.value })}
               placeholder={t('tagsLabel')}
             />
+            {dietaryTags.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {dietaryTags.map((tag, index) => (
+                  <Badge key={`${tag}-${index}`} tone="info" className="gap-1 pr-1">
+                    {tag}
+                    <button
+                      type="button"
+                      className="rounded-sm p-0.5 hover:bg-background/70"
+                      onClick={() => removeDietaryTag(index)}
+                      aria-label={`Remove ${tag}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+            ) : null}
             <Textarea
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               placeholder={t('noDescription')}
             />
+
+            <div className="rounded-md border border-border/70">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
+                onClick={() => setSpiceOpen((open) => !open)}
+              >
+                <span className="text-sm font-semibold">{t('spiceLevels')}</span>
+                {spiceOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </button>
+              {spiceOpen ? (
+                <div className="space-y-3 border-t border-border/70 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs font-medium text-muted-foreground">{t('required')}</span>
+                    <ToggleSwitch
+                      checked={form.isSpiceRequired}
+                      onChange={(checked) => setForm({ ...form, isSpiceRequired: checked })}
+                    />
+                  </div>
+                  <div className="grid grid-cols-[1fr_86px_auto] gap-2">
+                    <Input
+                      value={spiceDraft.name}
+                      onChange={(e) => setSpiceDraft({ ...spiceDraft, name: e.target.value })}
+                      placeholder={t('name')}
+                    />
+                    <Input
+                      value={spiceDraft.priceUsd}
+                      onChange={(e) => setSpiceDraft({ ...spiceDraft, priceUsd: e.target.value })}
+                      placeholder="USD"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                    />
+                    <Button type="button" className="px-3" onClick={addSpiceLevel}>
+                      <Plus className="h-4 w-4" />
+                      {t('add')}
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    {form.spiceLevels.length === 0 ? (
+                      <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
+                        {t('noSpiceLevelsYet')}
+                      </p>
+                    ) : (
+                      form.spiceLevels.map((spice, index) => (
+                        <div key={`${spice.name}-${index}`} className="grid grid-cols-[1fr_82px_36px_32px] items-center gap-2">
+                          <Input
+                            value={spice.name}
+                            onChange={(e) => updateSpiceLevel(index, { name: e.target.value })}
+                            placeholder={t('name')}
+                          />
+                          <Input
+                            value={spice.priceUsd}
+                            onChange={(e) => updateSpiceLevel(index, { priceUsd: e.target.value })}
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            aria-label={t('spiceLevels')}
+                          />
+                          <input
+                            type="radio"
+                            name="default-spice"
+                            checked={spice.isDefault}
+                            onChange={() => setDefaultSpice(index)}
+                            aria-label={t('defaultLabel')}
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => deleteSpiceLevel(index)}
+                            aria-label={t('deleteOrder')}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="rounded-md border border-border/70">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
+                onClick={() => setAddonsOpen((open) => !open)}
+              >
+                <span className="text-sm font-semibold">{t('addons')}</span>
+                {addonsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </button>
+              {addonsOpen ? (
+                <div className="space-y-3 border-t border-border/70 p-3">
+                  <div className="grid grid-cols-[1fr_86px_auto_auto] gap-2">
+                    <Input
+                      value={addonDraft.name}
+                      onChange={(e) => setAddonDraft({ ...addonDraft, name: e.target.value })}
+                      placeholder={t('name')}
+                    />
+                    <Input
+                      value={addonDraft.priceUsd}
+                      onChange={(e) => setAddonDraft({ ...addonDraft, priceUsd: e.target.value })}
+                      placeholder="USD"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                    />
+                    <div className="flex items-center gap-2 rounded-md border border-border px-2 text-xs">
+                      {t('qty')}
+                      <ToggleSwitch
+                        checked={addonDraft.hasQuantity}
+                        onChange={(checked) => setAddonDraft({ ...addonDraft, hasQuantity: checked })}
+                      />
+                    </div>
+                    <Button type="button" className="px-3" onClick={addAddon}>
+                      <Plus className="h-4 w-4" />
+                      {t('add')}
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    {form.addons.length === 0 ? (
+                      <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
+                        {t('noAddonsYet')}
+                      </p>
+                    ) : (
+                      form.addons.map((addon, index) => (
+                        <div key={`${addon.name}-${index}`} className="grid grid-cols-[1fr_82px_auto_52px_32px] items-center gap-2">
+                          <Input
+                            value={addon.name}
+                            onChange={(e) => updateAddon(index, { name: e.target.value })}
+                            placeholder={t('name')}
+                          />
+                          <Input
+                            value={addon.priceUsd}
+                            onChange={(e) => updateAddon(index, { priceUsd: e.target.value })}
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            aria-label={t('addons')}
+                          />
+                          {addon.hasQuantity ? <Badge>{t('qty')}</Badge> : <span className="text-xs text-muted-foreground">{t('toggle')}</span>}
+                          <label className="flex items-center gap-1.5 text-xs">
+                            <input
+                              type="checkbox"
+                              checked={addon.isDefault}
+                              onChange={(e) => updateAddon(index, { isDefault: e.target.checked })}
+                            />
+                            {t('defaultLabel')}
+                          </label>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => deleteAddon(index)}
+                            aria-label={t('deleteOrder')}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
             <div className="grid grid-cols-2 gap-2">
               <Button className="w-full">
                 <Check className="h-4 w-4" />
                 {editingItem ? t('save') : t('create')}
               </Button>
-              <Button type="button" variant="outline" className="w-full" onClick={resetForm}>
-                {t('clearFilters')}
+              <Button type="button" variant="outline" className="w-full" onClick={() => resetForm()}>
+                {t('cancel')}
               </Button>
             </div>
           </form>
         </CardContent>
-      </Card>
+          </Card>
+        </div>
+      ) : null}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
             <CardTitle>{t('menu')}</CardTitle>
-            <div className="relative w-72 max-w-full">
-              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-9"
-                placeholder={t('search')}
-              />
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Button type="button" variant="outline" onClick={openCategoryManager}>
+                <Pencil className="h-4 w-4" />
+                {t('manageCategories')}
+              </Button>
+              <Button type="button" onClick={openNewMenuForm}>
+                <Plus className="h-4 w-4" />
+                {t('addNewMenu')}
+              </Button>
+              <div className="relative w-72 max-w-full">
+                <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="pl-9"
+                  placeholder={t('search')}
+                />
+              </div>
             </div>
           </div>
         </CardHeader>
+        {message && !menuFormOpen ? (
+          <div className="mx-4 mb-3 rounded-md bg-muted px-3 py-2 text-sm">{message}</div>
+        ) : null}
         <CardContent className="grid auto-rows-fr gap-3 md:grid-cols-2">
           {items.map((item) => (
             <div key={item.id} className="flex h-full flex-col rounded-md border border-border p-3">
@@ -1837,6 +2801,20 @@ function MenuView({ menu, request, reload }) {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function ToggleSwitch({ checked, onChange }) {
+  return (
+    <label className="inline-flex cursor-pointer items-center">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="peer sr-only"
+      />
+      <span className="relative h-[18px] w-8 rounded-full bg-[var(--color-border-secondary)] transition-colors duration-200 after:absolute after:left-0.5 after:top-0.5 after:h-3.5 after:w-3.5 after:rounded-full after:bg-white after:transition-transform after:duration-200 peer-checked:bg-[#0f8a7f] peer-checked:after:translate-x-3.5" />
+    </label>
   );
 }
 
@@ -2083,6 +3061,7 @@ function PromoCodesView({ promos, request, reload }) {
     discountValue: '',
     maxDiscountUsd: '',
     active: true,
+    expiredDate: '',
   };
   const [form, setForm] = useState(emptyForm);
   const [editingPromo, setEditingPromo] = useState(null);
@@ -2158,6 +3137,7 @@ function PromoCodesView({ promos, request, reload }) {
             <Select
               value={form.discountType}
               onChange={(e) => setForm({ ...form, discountType: e.target.value })}
+              aria-label={t('discount')}
             >
               <option value="PERCENT">{t('percentDiscount')}</option>
               <option value="FIXED_USD">{t('fixedUsdDiscount')}</option>
@@ -2184,12 +3164,13 @@ function PromoCodesView({ promos, request, reload }) {
             <Select
               value={form.active ? 'true' : 'false'}
               onChange={(e) => setForm({ ...form, active: e.target.value === 'true' })}
+              aria-label={t('active')}
             >
               <option value="true">{t('available')}</option>
               <option value="false">{t('inactive')}</option>
             </Select>
             <div className="grid grid-cols-2 gap-2">
-              <Button className="w-full">
+              <Button className="w-full bg-green-600 hover:bg-green-700 text-white">
                 <Check className="h-4 w-4" />
                 {editingPromo ? t('save') : t('create')}
               </Button>
@@ -2242,6 +3223,8 @@ function PromoCodesView({ promos, request, reload }) {
 
 function AnalyticsView({ analytics, error, lastUpdatedAt, onRefresh }) {
   const { t } = useLanguage();
+  const [dateRange, setDateRange] = useState({ from: '', to: '' });
+  
   if (!analytics) {
     return (
       <Card>
@@ -2274,6 +3257,10 @@ function AnalyticsView({ analytics, error, lastUpdatedAt, onRefresh }) {
   const paymentRate = totalPayments ? Math.round((paidPayments / totalPayments) * 100) : 0;
   const topItem = analytics.topSellingItems?.[0];
   const topTable = analytics.revenueByTable?.[0];
+  const filteredPaidRevenueByDay = filterAnalyticsRowsByDate(
+    analytics.paidRevenueByDay || [],
+    dateRange
+  );
 
   return (
     <div className="space-y-4">
@@ -2286,10 +3273,32 @@ function AnalyticsView({ analytics, error, lastUpdatedAt, onRefresh }) {
               : t('liveRestaurantOps')}
           </p>
         </div>
-        <Button variant="outline" onClick={onRefresh}>
-          <RefreshCw className="h-4 w-4" />
-          {t('refresh')}
-        </Button>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+            {t('from')}
+            <Input
+              type="date"
+              value={dateRange.from}
+              onChange={(e) => setDateRange({ ...dateRange, from: e.target.value })}
+              className="w-40"
+              aria-label={t('from')}
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+            {t('to')}
+            <Input
+              type="date"
+              value={dateRange.to}
+              onChange={(e) => setDateRange({ ...dateRange, to: e.target.value })}
+              className="w-40"
+              aria-label={t('to')}
+            />
+          </label>
+          <Button variant="outline" onClick={onRefresh}>
+            <RefreshCw className="h-4 w-4" />
+            {t('refresh')}
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -2325,7 +3334,7 @@ function AnalyticsView({ analytics, error, lastUpdatedAt, onRefresh }) {
 
       <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
         <ItemDonutChart rows={analytics.topSellingItems} />
-        <PaidRevenueLineChart rows={analytics.paidRevenueByDay} />
+        <PaidRevenueLineChart rows={filteredPaidRevenueByDay} />
       </div>
 
       <div className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
@@ -2728,6 +3737,16 @@ function formatApiError(error, fallback) {
   return `${fallback}${status ? ` (${status.trim()})` : ''}${message && message !== fallback ? `: ${message}` : ''}`;
 }
 
+function maskEmail(value) {
+  if (!value) return '';
+  const email = String(value);
+  const atIndex = email.indexOf('@');
+  if (atIndex <= 1) {
+    return `${email.charAt(0)}***${atIndex >= 0 ? email.slice(atIndex) : ''}`;
+  }
+  return `${email.charAt(0)}***${email.slice(atIndex)}`;
+}
+
 function Metric({ icon: Icon, title, value, sub, tone = 'primary' }) {
   const toneClass =
     {
@@ -2876,6 +3895,17 @@ function PaidRevenueLineChart({ rows = [] }) {
       </CardContent>
     </Card>
   );
+}
+
+function filterAnalyticsRowsByDate(rows = [], dateRange = {}) {
+  if (!dateRange.from && !dateRange.to) return rows;
+  return rows.filter((row) => {
+    const day = String(row.day || '');
+    if (!day) return false;
+    if (dateRange.from && day < dateRange.from) return false;
+    if (dateRange.to && day > dateRange.to) return false;
+    return true;
+  });
 }
 
 function StatusFunnel({ rows = [] }) {
@@ -3028,6 +4058,126 @@ function maxBy(rows = [], key) {
     if (!best) return row;
     return Number(row[key] || 0) > Number(best[key] || 0) ? row : best;
   }, null);
+}
+
+// Admin Accounts
+
+function AdminAccountsView({ request, reload }) {
+  const { t } = useLanguage();
+  const [accounts, setAccounts] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [form, setForm] = useState({ username: '', password: '' });
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    loadAccounts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function loadAccounts() {
+    try {
+      const data = await request('/api/admin/accounts');
+      setAccounts(data || []);
+    } catch (error) {
+      setMessage('Failed to load accounts');
+    }
+  }
+
+  async function createAdmin(event) {
+    event.preventDefault();
+    setLoading(true);
+    setMessage('');
+    try {
+      await request('/api/admin/accounts', {
+        method: 'POST',
+        body: JSON.stringify({
+          username: form.username.trim(),
+          password: form.password.trim(),
+        }),
+      });
+      setForm({ username: '', password: '' });
+      setMessage('Admin account created successfully');
+      loadAccounts();
+    } catch (error) {
+      setMessage(error.message || 'Failed to create account');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deactivateAccount(username) {
+    if (!confirm(`Deactivate ${username}?`)) return;
+    try {
+      await request(`/api/admin/accounts/${username}/deactivate`, { method: 'PATCH' });
+      setMessage('Account deactivated');
+      loadAccounts();
+    } catch (error) {
+      setMessage(error.message || 'Failed to deactivate account');
+    }
+  }
+
+  return (
+    <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
+      <Card className="lg:sticky lg:top-24 lg:self-start">
+        <CardHeader>
+          <CardTitle>Create Admin</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {message && (
+            <div className="mb-3 rounded-md bg-muted px-3 py-2 text-sm">{message}</div>
+          )}
+          <form className="space-y-3" onSubmit={createAdmin}>
+            <Input
+              value={form.username}
+              onChange={(e) => setForm({ ...form, username: e.target.value })}
+              placeholder="Username"
+              disabled={loading}
+              required
+            />
+            <Input
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              placeholder="Password"
+              type="password"
+              disabled={loading}
+              required
+            />
+            <Button disabled={loading} className="w-full">
+              <Check className="h-4 w-4" />
+              Create
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Admin Accounts</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2">
+            {accounts.map((account) => (
+              <div key={account.username} className="flex items-center justify-between rounded-md border p-3">
+                <div>
+                  <div className="font-medium">{account.username}</div>
+                  <div className="text-sm text-muted-foreground">{account.role}</div>
+                </div>
+                {account.role !== 'SUPER_ADMIN' && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => deactivateAccount(account.username)}
+                  >
+                    Deactivate
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
 }
 
 // Utilities

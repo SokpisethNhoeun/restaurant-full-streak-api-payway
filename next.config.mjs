@@ -1,5 +1,27 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  async rewrites() {
+    const backendUrl = process.env.BACKEND_INTERNAL_URL;
+    if (!backendUrl) {
+      return [];
+    }
+
+    const target = backendUrl.replace(/\/$/, "");
+    return [
+      {
+        source: "/api/:path*",
+        destination: `${target}/api/:path*`
+      },
+      {
+        source: "/actuator/:path*",
+        destination: `${target}/actuator/:path*`
+      },
+      {
+        source: "/ws/:path*",
+        destination: `${target}/ws/:path*`
+      }
+    ];
+  },
   async headers() {
     return [
       {

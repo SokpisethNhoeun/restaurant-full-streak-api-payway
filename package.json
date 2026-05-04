@@ -9,6 +9,8 @@
     "lint": "eslint app components lib --ext .js,.jsx --max-warnings=0"
   },
   "dependencies": {
+    "@heroui/react": "^2.6.11",
+    "@internationalized/date": "^3.6.0",
     "@stomp/stompjs": "^7.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

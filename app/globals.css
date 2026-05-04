@@ -9,6 +9,7 @@
   --card: 0 0% 100%;
   --card-foreground: 221 39% 13%;
   --border: 214 24% 88%;
+  --color-border-secondary: hsl(var(--border));
   --input: 214 24% 88%;
   --ring: 173 67% 32%;
   --primary: 173 67% 32%;
@@ -26,24 +27,35 @@
 
 .dark {
   color-scheme: dark;
-  --background: 220 13% 9%;
-  --foreground: 210 40% 96%;
-  --card: 220 12% 13%;
-  --card-foreground: 210 40% 96%;
-  --border: 215 18% 24%;
-  --input: 215 18% 24%;
-  --ring: 173 61% 45%;
-  --primary: 173 61% 45%;
-  --primary-foreground: 220 13% 9%;
-  --secondary: 34 92% 58%;
-  --secondary-foreground: 220 13% 9%;
-  --muted: 220 11% 18%;
-  --muted-foreground: 215 16% 72%;
-  --accent: 198 78% 55%;
-  --accent-foreground: 220 13% 9%;
-  --destructive: 0 72% 60%;
-  --destructive-foreground: 0 0% 100%;
-  --shadow-soft: 0 18px 50px rgba(0, 0, 0, 0.35);
+  --background: 217 33% 17%;
+  --foreground: 210 40% 98%;
+  --card: 217 32% 22%;
+  --card-foreground: 210 40% 98%;
+  --border: 217 27% 28%;
+  --input: 217 27% 28%;
+  --ring: 142 71% 45%;
+  --primary: 142 71% 45%;
+  --primary-foreground: 217 33% 17%;
+  --secondary: 258 89% 66%;
+  --secondary-foreground: 217 33% 17%;
+  --muted: 217 27% 35%;
+  --muted-foreground: 210 13% 72%;
+  --accent: 39 89% 56%;
+  --accent-foreground: 217 33% 17%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 98%;
+  --shadow-soft: 0 18px 50px rgba(0, 0, 0, 0.55);
+  --color-border-secondary: hsl(var(--border));
+  
+  /* Status Colors */
+  --status-success: 142 71% 45%;
+  --status-success-bg: 142 50% 20%;
+  --status-error: 0 84% 60%;
+  --status-error-bg: 0 64% 20%;
+  --status-warning: 39 89% 56%;
+  --status-warning-bg: 39 80% 25%;
+  --status-info: 202 78% 45%;
+  --status-info-bg: 202 70% 22%;
 }
 
 * {
@@ -89,6 +101,13 @@ textarea {
 .happyboat-goey-toast {
   min-width: min(92vw, 430px) !important;
   max-width: min(92vw, 430px) !important;
+   background: transparent !important;
+}
+
+.happyboat-goey-toast .gooey-header,
+.happyboat-goey-toast .gooey-iconWrapper,
+.happyboat-goey-toast-title {
+  color: #ffffff !important;
 }
 
 .happyboat-goey-toast-title {
@@ -98,13 +117,33 @@ textarea {
 }
 
 .happyboat-goey-toast-description {
+  color: #ffffff !important;
   font-size: 13px !important;
   line-height: 1.45 !important;
 }
 
 .happyboat-goey-toast-action {
+  border: 1px solid rgba(255, 255, 255, 0.28) !important;
+  background: rgba(255, 255, 255, 0.16) !important;
+  color: #ffffff !important;
   min-height: 34px !important;
   padding-inline: 14px !important;
+}
+
+.happyboat-goey-toast-action:hover {
+  background: rgba(255, 255, 255, 0.22) !important;
+}
+
+.happyboat-goey-toast .gooey-progressWrapper {
+  background: rgba(255, 255, 255, 0.22) !important;
+}
+
+.happyboat-goey-toast .gooey-progressBar {
+  background: #ffffff !important;
+}
+
+.happyboat-goey-toast .gooey-closeButton {
+  color: #ffffff !important;
 }
 
 @keyframes bottom-sheet-up {

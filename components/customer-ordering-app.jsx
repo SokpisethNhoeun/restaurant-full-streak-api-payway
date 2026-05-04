@@ -19,10 +19,8 @@ import {
   Download,
   Minus,
   Plus,
-  QrCode,
   Search,
   ShoppingBag,
-  Smartphone,
   Trash2,
   Utensils,
   X,
@@ -46,7 +44,7 @@ const CUSTOMER_ALERT_AFTER_MS = 10 * 60 * 1000;
 export default function CustomerOrderingApp({ tableNumber }) {
   const { t } = useLanguage();
   const [table, setTable] = useState(null);
-  const [menu, setMenu] = useState({ categories: [], items: [], addons: [], options: [] });
+  const [menu, setMenu] = useState({ categories: [], items: [], addons: [], options: [], spiceLevels: [] });
   const [categoryId, setCategoryId] = useState('');
   const [priceFilter, setPriceFilter] = useState('all');
   const [query, setQuery] = useState('');
@@ -60,6 +58,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
     showDetail: false,
   });
   const [cartOpen, setCartOpen] = useState(false);
+  const [expandedOrderId, setExpandedOrderId] = useState(null);
 
   const [orders, setOrders] = useState([]);
   const [payments, setPayments] = useState({});
@@ -180,9 +179,23 @@ export default function CustomerOrderingApp({ tableNumber }) {
       if (paidToastShown.current[orderId]) return;
       paidToastShown.current[orderId] = true;
       playCustomerAlert();
-      showToast(text);
+      gooeyToast.success(
+        t('paymentReceivedAlert'),
+        goeyToastOptions({
+          id: `payment-received-${orderId}`,
+          description: text,
+          icon: <CheckCircle2 className="h-4 w-4" />,
+          action: {
+            label: t('viewOrder') || 'View Order',
+            onClick: () => {
+              setExpandedOrderId(orderId);
+              gooeyToast.dismiss(`payment-received-${orderId}`);
+            },
+          },
+        })
+      );
     },
-    [playCustomerAlert, showToast, t]
+    [playCustomerAlert, t]
   );
 
   const notifyOrderStatusChanged = useCallback(
@@ -340,6 +353,10 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
   const groupedAddons = useMemo(() => groupBy(menu.addons, 'menuItemId'), [menu.addons]);
   const groupedOptions = useMemo(() => groupBy(menu.options, 'menuItemId'), [menu.options]);
+  const groupedSpiceLevels = useMemo(
+    () => groupBy(menu.spiceLevels || [], 'menuItemId'),
+    [menu.spiceLevels]
+  );
 
   const totals = useMemo(() => {
     const subtotalUsd = cart.reduce((sum, item) => sum + Number(item.lineUsd || 0), 0);
@@ -511,8 +528,9 @@ export default function CustomerOrderingApp({ tableNumber }) {
         items: cart.map((item) => ({
           menuItemId: item.id,
           quantity: item.quantity,
+          selectedSpiceLevelId: item.selectedSpiceLevelId || null,
           spiceLevel: item.spiceLevel,
-          optionIds: item.optionIds,
+          optionIds: item.optionIds || [],
           addons: item.addons.map((addon) => ({ addonId: addon.id, quantity: addon.quantity })),
           specialInstructions: item.specialInstructions,
         })),
@@ -736,6 +754,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                 value={categoryId}
                 onChange={(e) => setCategoryId(e.target.value)}
                 className="h-10 rounded-xl text-sm"
+                aria-label={t('category')}
               >
                 <option value="">{t('allCategories')}</option>
                 {menu.categories.map((cat) => (
@@ -825,50 +844,13 @@ export default function CustomerOrderingApp({ tableNumber }) {
                   </div>
                 ) : (
                   cart.map((item) => (
-                    <div
+                    <CartLineItem
                       key={item.cartId}
-                      className="group flex gap-3 rounded-xl border border-border/50 bg-card p-3 transition-colors hover:border-border"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-start justify-between gap-2">
-                          <h3 className="text-sm font-medium leading-snug">{item.name}</h3>
-                          <button
-                            onClick={() =>
-                              setCart((c) => c.filter((e) => e.cartId !== item.cartId))
-                            }
-                            aria-label="Remove item"
-                            className="shrink-0 rounded-md p-0.5 text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                        {item.spiceLevel && item.spiceLevel !== 'NORMAL' ? (
-                          <p className="mt-0.5 text-xs text-muted-foreground">{item.spiceLevel}</p>
-                        ) : null}
-                        <div className="mt-2 flex items-center justify-between">
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              onClick={() => changeQuantity(item.cartId, -1)}
-                              className="flex h-6 w-6 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition hover:border-primary hover:text-primary"
-                              aria-label="Decrease"
-                            >
-                              <Minus className="h-3 w-3" />
-                            </button>
-                            <span className="w-5 text-center text-sm font-semibold">
-                              {item.quantity}
-                            </span>
-                            <button
-                              onClick={() => changeQuantity(item.cartId, 1)}
-                              className="flex h-6 w-6 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition hover:border-primary hover:text-primary"
-                              aria-label="Increase"
-                            >
-                              <Plus className="h-3 w-3" />
-                            </button>
-                          </div>
-                          <span className="text-sm font-semibold">{usd(item.lineUsd)}</span>
-                        </div>
-                      </div>
-                    </div>
+                      item={item}
+                      onDecrease={() => changeQuantity(item.cartId, -1)}
+                      onIncrease={() => changeQuantity(item.cartId, 1)}
+                      onRemove={() => setCart((c) => c.filter((e) => e.cartId !== item.cartId))}
+                    />
                   ))
                 )}
               </div>
@@ -928,20 +910,24 @@ export default function CustomerOrderingApp({ tableNumber }) {
               </div>
 
               {/* Total */}
-              <div className="rounded-xl bg-muted/50 px-4 py-3">
+              <div className="rounded-2xl bg-muted/40 px-4 py-4">
                 <div className="mb-1 flex items-baseline justify-between">
                   <span className="text-xs text-muted-foreground">{t('subtotal')}</span>
                   <span className="text-sm font-semibold">{usd(totals.subtotalUsd)}</span>
                 </div>
                 {totals.discountUsd > 0 ? (
                   <div className="mb-1 flex items-baseline justify-between text-primary">
-                    <span className="text-xs">{t('discount')}</span>
+                    <span className="text-xs">
+                      {t('discount')}
+                      {promoState.detail?.code ? ` (${promoState.detail.code})` : ''}
+                    </span>
                     <span className="text-sm font-semibold">-{usd(totals.discountUsd)}</span>
                   </div>
                 ) : null}
+                <div className="my-2 border-t border-border/60" />
                 <div className="flex items-baseline justify-between">
                   <span className="text-sm text-muted-foreground">{t('total')}</span>
-                  <span className="text-base font-bold">{usd(totals.totalUsd)}</span>
+                  <span className="text-xl font-bold">{usd(totals.totalUsd)}</span>
                 </div>
                 <div className="mt-0.5 text-right text-xs text-muted-foreground">
                   {khr(totals.totalKhr)}
@@ -950,7 +936,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
               {/* Place order button */}
               <Button
-                className="h-11 w-full rounded-xl text-sm font-semibold shadow-sm"
+                className="h-14 w-full rounded-2xl text-base font-bold shadow-sm"
                 disabled={!cart.length || totals.totalUsd <= 0 || submitting}
                 onClick={submitOrder}
               >
@@ -964,7 +950,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                     <ShoppingBag className="h-4 w-4" />
                     {t('placeOrder')}
                     {cart.length > 0 ? (
-                      <ChevronRight className="ml-auto h-4 w-4 opacity-60" />
+                      <span className="ml-auto">{usd(totals.totalUsd)}</span>
                     ) : null}
                   </span>
                 )}
@@ -973,6 +959,14 @@ export default function CustomerOrderingApp({ tableNumber }) {
           </Card>
 
           {/* ── Past orders ───────────────────────────────── */}
+          {visibleOrders.length ? (
+            <div className="flex items-center justify-between px-1">
+              <h2 className="text-sm font-bold">{t('orderStatus')}</h2>
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+                {visibleOrders.length}
+              </span>
+            </div>
+          ) : null}
           {visibleOrders.map((order) => {
             const payment = payments[order.id];
             const secs = secsRemaining(payment);
@@ -1041,6 +1035,18 @@ export default function CustomerOrderingApp({ tableNumber }) {
                     <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
                   </div>
                   <CustomerOrderProgress status={order.status} />
+
+                  {/* View Details button */}
+                  <button
+                    type="button"
+                    onClick={() => setExpandedOrderId(expandedOrderId === order.id ? null : order.id)}
+                    className="w-full text-left text-xs font-medium text-primary hover:underline"
+                  >
+                    {expandedOrderId === order.id ? t('hideDetails') : t('viewDetails')}
+                  </button>
+
+                  {/* Expanded order details */}
+                  {expandedOrderId === order.id ? <OrderDetailMiniItems order={order} /> : null}
 
                   {isCancelled ? (
                     <>
@@ -1197,7 +1203,8 @@ export default function CustomerOrderingApp({ tableNumber }) {
       {activeItem ? (
         <CustomizeItem
           item={activeItem}
-          addons={groupedAddons[activeItem.id] || []}
+          addons={activeItem.addons || groupedAddons[activeItem.id] || []}
+          spiceLevels={activeItem.spiceLevels || groupedSpiceLevels[activeItem.id] || []}
           options={groupedOptions[activeItem.id] || []}
           onClose={() => setActiveItem(null)}
           onAdd={addConfiguredItem}
@@ -1312,6 +1319,122 @@ function MenuCard({ item, onSelect }) {
   );
 }
 
+function CartLineItem({ item, onDecrease, onIncrease, onRemove, controlSize = 'sm' }) {
+  const { t } = useLanguage();
+  const buttonSize = controlSize === 'md' ? 'h-7 w-7' : 'h-6 w-6';
+  const quantityWidth = controlSize === 'md' ? 'w-6' : 'w-5';
+
+  return (
+    <div className="relative flex gap-3 rounded-2xl border border-border/60 bg-card p-4 pr-10">
+      <img
+        src={displayImageUrl(item.imageUrl)}
+        alt={item.name}
+        className="h-14 w-14 shrink-0 rounded-xl object-cover"
+        onError={replaceBrokenImage}
+      />
+      <button
+        onClick={onRemove}
+        aria-label={t('removeItem')}
+        className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
+      >
+        <Trash2 className="h-4 w-4" />
+      </button>
+      <div className="min-w-0 flex-1">
+        <h3 className="line-clamp-2 text-base font-bold leading-snug">{item.name}</h3>
+        {item.spiceLevelName && item.spiceLevelName.toUpperCase() !== 'NORMAL' ? (
+          <p className="mt-0.5 text-xs text-muted-foreground">{item.spiceLevelName}</p>
+        ) : null}
+        {item.addons?.length ? (
+          <div className="mt-1 space-y-0.5">
+            {item.addons.map((addon, index) => (
+              <p key={addon.id || `${addon.name}-${index}`} className="text-xs text-muted-foreground">
+                + {formatAddonDetail(addon)}
+              </p>
+            ))}
+          </div>
+        ) : null}
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={onDecrease}
+              className={cn(
+                'flex items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition hover:border-primary hover:text-primary',
+                buttonSize
+              )}
+              aria-label={t('decrease')}
+            >
+              <Minus className="h-3 w-3" />
+            </button>
+            <span className={cn('text-center text-sm font-semibold', quantityWidth)}>
+              {item.quantity}
+            </span>
+            <button
+              onClick={onIncrease}
+              className={cn(
+                'flex items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition hover:border-primary hover:text-primary',
+                buttonSize
+              )}
+              aria-label={t('increase')}
+            >
+              <Plus className="h-3 w-3" />
+            </button>
+          </div>
+          <span className="shrink-0 text-sm font-semibold">{usd(item.lineUsd)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OrderDetailMiniItems({ order }) {
+  if (!order.items?.length) return null;
+
+  return (
+    <div className="space-y-2 border-t border-border/30 pt-3">
+      {order.items.map((item, index) => (
+        <div
+          key={item.id || `${item.menuItemId}-${index}`}
+          className="flex gap-2 rounded-xl bg-muted/30 p-2.5"
+        >
+          <img
+            src={displayImageUrl(item.imageUrl)}
+            alt={item.name}
+            className="h-12 w-12 shrink-0 rounded-xl object-cover"
+            onError={replaceBrokenImage}
+          />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold leading-tight">{item.name || item.itemName}</p>
+            <p className="text-xs text-muted-foreground">x{item.quantity}</p>
+            {item.spiceLevelName && item.spiceLevelName.toUpperCase() !== 'NORMAL' ? (
+              <p className="mt-1 text-xs text-muted-foreground">{item.spiceLevelName}</p>
+            ) : null}
+            {item.addons?.length ? (
+              <div className="mt-1 space-y-0.5">
+                {item.addons.map((addon, addonIndex) => (
+                  <p
+                    key={addon.id || addon.addonId || `${addon.name}-${addonIndex}`}
+                    className="text-xs text-muted-foreground"
+                  >
+                    + {formatAddonDetail(addon)}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+            {item.specialInstructions ? (
+              <p className="mt-1 text-xs italic text-muted-foreground">
+                {item.specialInstructions}
+              </p>
+            ) : null}
+          </div>
+          <div className="shrink-0 text-right">
+            <p className="text-sm font-semibold">{usd(item.lineUsd || item.subtotalUsd || 0)}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ── MobileCartSheet ─────────────────────────────────────── */
 function MobileCartSheet({
   cart,
@@ -1338,6 +1461,7 @@ function MobileCartSheet({
   onClose,
 }) {
   const { t } = useLanguage();
+  const [expandedOrderId, setExpandedOrderId] = useState(null);
 
   return (
     <div
@@ -1364,7 +1488,7 @@ function MobileCartSheet({
           <button
             onClick={onClose}
             className="rounded-xl border border-border p-1.5 text-muted-foreground hover:text-foreground"
-            aria-label="Close cart"
+            aria-label={t('closeCart')}
           >
             <X className="h-4 w-4" />
           </button>
@@ -1379,68 +1503,32 @@ function MobileCartSheet({
               </div>
             ) : (
               cart.map((item) => (
-                <div
+                <CartLineItem
                   key={item.cartId}
-                  className="flex gap-3 rounded-xl border border-border/50 bg-card p-3"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-start justify-between gap-2">
-                      <h3 className="text-sm font-medium leading-snug">{item.name}</h3>
-                      <button
-                        onClick={() =>
-                          setCart((current) =>
-                            current.filter((entry) => entry.cartId !== item.cartId)
-                          )
-                        }
-                        aria-label="Remove item"
-                        className="shrink-0 rounded-md p-0.5 text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                    {item.spiceLevel && item.spiceLevel !== 'NORMAL' ? (
-                      <p className="mt-0.5 text-xs text-muted-foreground">{item.spiceLevel}</p>
-                    ) : null}
-                    <div className="mt-2 flex items-center justify-between">
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          onClick={() => changeQuantity(item.cartId, -1)}
-                          className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition hover:border-primary hover:text-primary"
-                          aria-label="Decrease"
-                        >
-                          <Minus className="h-3 w-3" />
-                        </button>
-                        <span className="w-6 text-center text-sm font-semibold">
-                          {item.quantity}
-                        </span>
-                        <button
-                          onClick={() => changeQuantity(item.cartId, 1)}
-                          className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition hover:border-primary hover:text-primary"
-                          aria-label="Increase"
-                        >
-                          <Plus className="h-3 w-3" />
-                        </button>
-                      </div>
-                      <span className="text-sm font-semibold">{usd(item.lineUsd)}</span>
-                    </div>
-                  </div>
-                </div>
+                  item={item}
+                  controlSize="md"
+                  onDecrease={() => changeQuantity(item.cartId, -1)}
+                  onIncrease={() => changeQuantity(item.cartId, 1)}
+                  onRemove={() =>
+                    setCart((current) => current.filter((entry) => entry.cartId !== item.cartId))
+                  }
+                />
               ))
             )}
           </div>
 
           <div className="space-y-2">
-            <div className="flex gap-2">
+            <div className="grid gap-2">
               <Input
                 value={promoCode}
                 onChange={(event) => onPromoCodeChange(event.target.value)}
                 placeholder={t('promoCode')}
-                className="h-10 rounded-xl text-sm uppercase tracking-wider"
+                className="h-10 w-full rounded-xl text-sm uppercase tracking-wider"
               />
               <Button
                 type="button"
                 variant="outline"
-                className="h-10 shrink-0 rounded-xl px-3 text-xs"
+                className="h-10 w-full rounded-xl px-3 text-xs"
                 disabled={promoState.status === 'checking'}
                 onClick={onApplyPromo}
               >
@@ -1482,20 +1570,24 @@ function MobileCartSheet({
             ) : null}
           </div>
 
-          <div className="rounded-xl bg-muted/50 px-4 py-3">
+          <div className="rounded-2xl bg-muted/40 px-4 py-4">
             <div className="mb-1 flex items-baseline justify-between">
               <span className="text-xs text-muted-foreground">{t('subtotal')}</span>
               <span className="text-sm font-semibold">{usd(totals.subtotalUsd)}</span>
             </div>
             {totals.discountUsd > 0 ? (
               <div className="mb-1 flex items-baseline justify-between text-primary">
-                <span className="text-xs">{t('discount')}</span>
+                <span className="text-xs">
+                  {t('discount')}
+                  {promoState.detail?.code ? ` (${promoState.detail.code})` : ''}
+                </span>
                 <span className="text-sm font-semibold">-{usd(totals.discountUsd)}</span>
               </div>
             ) : null}
+            <div className="my-2 border-t border-border/60" />
             <div className="flex items-baseline justify-between">
               <span className="text-sm text-muted-foreground">{t('total')}</span>
-              <span className="text-base font-bold">{usd(totals.totalUsd)}</span>
+              <span className="text-xl font-bold">{usd(totals.totalUsd)}</span>
             </div>
             <div className="mt-0.5 text-right text-xs text-muted-foreground">
               {khr(totals.totalKhr)}
@@ -1503,23 +1595,27 @@ function MobileCartSheet({
           </div>
 
           <Button
-            className="h-11 w-full rounded-xl text-sm font-semibold shadow-sm"
+            className="h-14 w-full rounded-2xl text-base font-bold shadow-sm"
             disabled={!cart.length || totals.totalUsd <= 0 || submitting}
             onClick={onSubmitOrder}
           >
             {submitting ? (
-              t('placingOrder')
+              <span className="flex items-center gap-2">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
+                {t('placingOrder')}
+              </span>
             ) : (
-              <>
+              <span className="flex w-full items-center gap-2">
                 <ShoppingBag className="h-4 w-4" />
                 {t('placeOrder')}
-              </>
+                {cart.length > 0 ? <span className="ml-auto">{usd(totals.totalUsd)}</span> : null}
+              </span>
             )}
           </Button>
 
           {orders.length ? (
             <div className="space-y-3 border-t border-border/60 pt-4">
-              <h3 className="text-sm font-bold">{t('recentOrders')}</h3>
+              <h3 className="text-sm font-bold">{t('orderStatus')}</h3>
               {orders.map((order) => {
                 const payment = payments[order.id];
                 const secs = secsRemaining(payment);
@@ -1587,6 +1683,19 @@ function MobileCartSheet({
                         <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
                       </div>
                       <CustomerOrderProgress status={order.status} />
+                      
+                      {/* View Details button */}
+                      <button
+                        type="button"
+                        onClick={() => setExpandedOrderId(expandedOrderId === order.id ? null : order.id)}
+                        className="w-full text-left text-xs font-medium text-primary hover:underline"
+                      >
+                        {expandedOrderId === order.id ? t('hideDetails') : t('viewDetails')}
+                      </button>
+
+                      {/* Expanded order details */}
+                      {expandedOrderId === order.id ? <OrderDetailMiniItems order={order} /> : null}
+
                       {isCancelled ? (
                         <>
                           <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
@@ -1716,68 +1825,8 @@ function CustomerOrderProgress({ status }) {
 /* ── PaymentModal ─────────────────────────────────────────── */
 function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) {
   const { t } = useLanguage();
-  const [showQr, setShowQr] = useState(false);
-  const [openingPaymentApp, setOpeningPaymentApp] = useState(false);
-  const [fallbackMessage, setFallbackMessage] = useState('');
-  const fallbackTimerRef = useRef(null);
-  const visibilityChangedRef = useRef(false);
   const isPaid = payment.status === 'PAID';
   const isExpired = payment.status === 'EXPIRED' || secondsRemaining === 0;
-
-  useEffect(() => {
-    setShowQr(false);
-    setOpeningPaymentApp(false);
-    setFallbackMessage('');
-    return () => {
-      if (fallbackTimerRef.current) {
-        window.clearTimeout(fallbackTimerRef.current);
-      }
-    };
-  }, [payment.id]);
-
-  async function openPaymentApp() {
-    if (!canOpenMobilePaymentApp()) {
-      setFallbackMessage(t('bankAppMobileOnly'));
-      setShowQr(true);
-      return;
-    }
-
-    visibilityChangedRef.current = document.visibilityState === 'hidden';
-    setOpeningPaymentApp(true);
-    setFallbackMessage('');
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        visibilityChangedRef.current = true;
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    if (fallbackTimerRef.current) {
-      window.clearTimeout(fallbackTimerRef.current);
-    }
-
-    try {
-      const response = await api(`/api/payments/${payment.id}/deeplink`, { method: 'POST' });
-      if (!isValidPaymentAppUrl(response?.url)) {
-        throw new Error('Invalid payment app link');
-      }
-      window.location.href = response.url;
-      fallbackTimerRef.current = window.setTimeout(() => {
-        document.removeEventListener('visibilitychange', handleVisibilityChange);
-        setOpeningPaymentApp(false);
-        if (!visibilityChangedRef.current && document.visibilityState === 'visible') {
-          setFallbackMessage(t('bankAppNotOpened'));
-          setShowQr(true);
-        }
-      }, 1800);
-    } catch {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      setOpeningPaymentApp(false);
-      setFallbackMessage(t('bankAppNotOpened'));
-      setShowQr(true);
-    }
-  }
 
   return (
     <div className="fixed inset-0 z-40 flex items-end bg-black/40 backdrop-blur-sm sm:items-center sm:p-4">
@@ -1790,9 +1839,7 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
                 ? t('paymentReceived')
                 : isExpired
                   ? t('paymentExpired')
-                  : showQr
-                    ? t('scanToPay')
-                    : t('choosePaymentMethod')}
+                  : t('scanToPay')}
             </h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {order?.orderNumber} · {payment.paymentNumber}
@@ -1801,31 +1848,15 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
           <button
             onClick={onClose}
             className="rounded-xl border border-border p-1.5 text-muted-foreground hover:text-foreground"
-            aria-label="Close"
+            aria-label={t('close')}
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
         <div className="space-y-4 p-5 text-center">
-          {!isPaid && !isExpired && !showQr ? (
-            <PaymentOptionsStep
-              payment={payment}
-              openingPaymentApp={openingPaymentApp}
-              fallbackMessage={fallbackMessage}
-              onOpenPaymentApp={openPaymentApp}
-              onShowQr={() => {
-                setFallbackMessage('');
-                setShowQr(true);
-              }}
-            />
-          ) : !isPaid && !isExpired ? (
+          {!isPaid && !isExpired ? (
             <>
-              {fallbackMessage ? (
-                <div className="rounded-xl border border-secondary/30 bg-secondary/10 px-3 py-2 text-xs font-medium text-secondary-foreground">
-                  {fallbackMessage}
-                </div>
-              ) : null}
               <div
                 className="mx-auto inline-flex rounded-2xl border border-border bg-white p-4 shadow-sm"
                 data-payment-qr={payment.id}
@@ -1843,12 +1874,10 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
             </div>
           )}
 
-          {!isPaid && !isExpired && !showQr ? null : (
-            <div>
-              <p className="text-xl font-bold">{displayUsd(payment.amountUsd)}</p>
-              <p className="text-sm text-muted-foreground">{khr(payment.amountKhr)}</p>
-            </div>
-          )}
+          <div>
+            <p className="text-xl font-bold">{displayUsd(payment.amountUsd)}</p>
+            <p className="text-sm text-muted-foreground">{khr(payment.amountKhr)}</p>
+          </div>
 
           <div
             className={cn(
@@ -1880,13 +1909,13 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
             >
               {t('downloadReceipt')} <ChevronRight className="h-4 w-4" />
             </a>
-          ) : !isExpired && showQr ? (
+          ) : !isExpired ? (
             <div className="grid gap-2 sm:grid-cols-2">
               <Button
                 type="button"
                 variant="outline"
                 className="h-10 rounded-xl text-sm"
-                onClick={() => downloadPaymentQrImage(order, payment)}
+                onClick={() => downloadPaymentQrImage(order, payment, t)}
               >
                 <Download className="h-4 w-4" />
                 {t('saveImage')}
@@ -1899,28 +1928,7 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
               >
                 {t('checkPaymentStatus')}
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="h-10 rounded-xl text-sm sm:col-span-2"
-                onClick={() => {
-                  setFallbackMessage('');
-                  setShowQr(false);
-                }}
-              >
-                {t('back')}
-              </Button>
             </div>
-          ) : !isExpired ? (
-            <Button
-              type="button"
-              variant="outline"
-              className="h-10 w-full rounded-xl text-sm"
-              onClick={onClose}
-            >
-              <X className="h-4 w-4" />
-              {t('close')}
-            </Button>
           ) : (
             <div className="grid gap-2 sm:grid-cols-2">
               <Button
@@ -1948,94 +1956,133 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
   );
 }
 
-function PaymentOptionsStep({
-  payment,
-  openingPaymentApp,
-  fallbackMessage,
-  onOpenPaymentApp,
-  onShowQr,
-}) {
-  const { t } = useLanguage();
-
-  return (
-    <div className="space-y-4 text-left">
-      <div className="rounded-xl border border-border bg-muted/40 px-4 py-3 text-center">
-        <p className="text-xs font-medium text-muted-foreground">{t('amountToPay')}</p>
-        <p className="mt-1 text-2xl font-bold">{displayUsd(payment.amountUsd)}</p>
-        <p className="text-sm text-muted-foreground">{khr(payment.amountKhr)}</p>
-      </div>
-
-      <div className="space-y-2">
-        <p className="text-xs font-semibold uppercase text-muted-foreground">{t('choosePaymentMethod')}</p>
-      </div>
-
-      <div className="grid gap-2 sm:grid-cols-2">
-        <Button
-          type="button"
-          className="h-24 flex-col gap-2 rounded-xl text-sm font-semibold"
-          disabled={openingPaymentApp}
-          onClick={onOpenPaymentApp}
-        >
-          <Smartphone className="h-7 w-7" />
-          {openingPaymentApp ? t('openingBank') : t('openPaymentLink')}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          className="h-24 flex-col gap-2 rounded-xl text-sm font-semibold"
-          onClick={onShowQr}
-        >
-          <QrCode className="h-7 w-7" />
-          {t('scanQrInstead')}
-        </Button>
-      </div>
-
-      {fallbackMessage ? (
-        <div className="rounded-xl border border-secondary/30 bg-secondary/10 px-3 py-2 text-center text-xs font-medium text-secondary-foreground">
-          {fallbackMessage}
-        </div>
-      ) : null}
-
-    </div>
-  );
-}
-
 /* ── CustomizeItem ────────────────────────────────────────── */
-function CustomizeItem({ item, addons, options, onClose, onAdd }) {
+function CustomizeItem({ item, addons, spiceLevels = [], options, onClose, onAdd }) {
   const { t } = useLanguage();
+  const availableSpiceLevels = useMemo(
+    () =>
+      (spiceLevels.length
+        ? spiceLevels
+        : options
+            .filter((option) => option.optionGroup === 'Spice')
+            .map((option) => ({
+              ...option,
+              name: option.optionName,
+            }))).map((spice) => ({
+        ...spice,
+        name: spice.name || spice.optionName || '',
+      })),
+    [options, spiceLevels]
+  );
+  const hasSpiceLevels = availableSpiceLevels.length > 0;
+  const hasAddons = addons.length > 0;
+  const initialStep = hasSpiceLevels ? 1 : 2;
+  const defaultSpiceLevel = useMemo(
+    () =>
+      availableSpiceLevels.find((spice) => isDefault(spice)) ||
+      availableSpiceLevels.find((spice) => spiceLevelLabel(spice).toUpperCase() === 'NORMAL') ||
+      null,
+    [availableSpiceLevels]
+  );
+  const defaultAddons = useMemo(
+    () =>
+      addons
+        .filter((addon) => isDefault(addon))
+        .map((addon) => selectedAddonPayload(addon)),
+    [addons]
+  );
+
   const [quantity, setQuantity] = useState(1);
-  const [spiceLevel, setSpiceLevel] = useState('NORMAL');
-  const [selectedOptions, setSelectedOptions] = useState([]);
-  const [selectedAddons, setSelectedAddons] = useState([]);
+  const [currentStep, setCurrentStep] = useState(initialStep);
+  const [selectedSpiceLevel, setSelectedSpiceLevel] = useState(defaultSpiceLevel);
+  const [selectedAddons, setSelectedAddons] = useState(defaultAddons);
   const [specialInstructions, setSpecialInstructions] = useState('');
 
-  const unitUsd =
-    Number(item.priceUsd || 0) +
-    selectedOptions.reduce((sum, o) => sum + Number(o.priceUsd || 0), 0);
+  const spiceRequired =
+    Boolean(item.isSpiceRequired) || availableSpiceLevels.some((spice) => Boolean(spice.required));
+  const showingSpiceStep = currentStep === 1 && hasSpiceLevels;
+  const unitUsd = Number(item.priceUsd || 0) + Number(selectedSpiceLevel?.priceUsd || 0);
   const addonTotalUsd = selectedAddons.reduce(
-    (sum, a) => sum + Number(a.priceUsd || 0) * a.quantity,
+    (sum, addon) => sum + Number(addon.priceUsd || 0) * Number(addon.quantity || 1),
     0
   );
   const lineUsd = unitUsd * quantity + addonTotalUsd * quantity;
-  const optionGroups = groupBy(options, 'optionGroup');
+  const selectedOptionIds = selectedSpiceLevel?.optionGroup === 'Spice' ? [selectedSpiceLevel.id] : [];
+  const spiceName = selectedSpiceLevel ? spiceLevelLabel(selectedSpiceLevel) : '';
+  const addDisabled = spiceRequired && hasSpiceLevels && !selectedSpiceLevel;
+
+  function addItemToCart() {
+    if (addDisabled) return;
+    onAdd({
+      ...item,
+      quantity,
+      selectedSpiceLevelId: selectedSpiceLevel?.optionGroup === 'Spice' ? null : selectedSpiceLevel?.id || null,
+      spiceLevelName: spiceName || 'Normal',
+      spiceLevelPriceUsd: Number(selectedSpiceLevel?.priceUsd || 0),
+      spiceLevel: spiceName ? spiceName.toUpperCase() : 'NORMAL',
+      optionIds: selectedOptionIds,
+      addons: selectedAddons,
+      unitUsd,
+      addonTotalUsd,
+      lineUsd,
+      specialInstructions,
+    });
+  }
+
+  function nextStep() {
+    if (showingSpiceStep && !addDisabled) {
+      setCurrentStep(2);
+    }
+  }
 
   function toggleAddon(addon) {
-    setSelectedAddons((curr) =>
-      curr.some((e) => e.id === addon.id)
-        ? curr.filter((e) => e.id !== addon.id)
-        : [...curr, { ...addon, quantity: 1 }]
+    setSelectedAddons((current) =>
+      current.some((entry) => entry.id === addon.id)
+        ? current.filter((entry) => entry.id !== addon.id)
+        : [...current, selectedAddonPayload(addon)]
     );
   }
 
-  function chooseOption(option) {
-    setSelectedOptions((curr) => [
-      ...curr.filter((e) => e.optionGroup !== option.optionGroup),
-      option,
-    ]);
-    if (option.optionGroup?.toLowerCase() === 'spice') {
-      setSpiceLevel(option.optionName.toUpperCase());
-    }
+  function changeAddonQuantity(addonId, delta) {
+    setSelectedAddons((current) =>
+      current.map((addon) => {
+        if (addon.id !== addonId) return addon;
+        const nextQuantity = Math.max(
+          1,
+          Math.min(addonSelectionMax(addon), Number(addon.quantity || 1) + delta)
+        );
+        return { ...addon, quantity: nextQuantity };
+      })
+    );
   }
+
+  const quantityAndPrice = (
+    <div className="flex items-center justify-between pt-2">
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setQuantity(Math.max(1, quantity - 1))}
+          className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
+          aria-label={t('decrease')}
+        >
+          <Minus className="h-4 w-4" />
+        </button>
+        <span className="w-8 text-center text-base font-bold">{quantity}</span>
+        <button
+          onClick={() => setQuantity(quantity + 1)}
+          className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
+          aria-label={t('increase')}
+        >
+          <Plus className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="text-right">
+        <div className="text-lg font-bold">{usd(lineUsd)}</div>
+        <div className="text-xs text-muted-foreground">
+          {usd(unitUsd)} {t('each')}
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="fixed inset-0 z-30 flex items-end bg-black/40 backdrop-blur-sm sm:items-center sm:p-4">
@@ -2054,7 +2101,7 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
           <button
             onClick={onClose}
             className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-background/80 text-foreground backdrop-blur-sm hover:bg-background"
-            aria-label="Close"
+            aria-label={t('close')}
           >
             <X className="h-4 w-4" />
           </button>
@@ -2064,170 +2111,213 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
           </div>
         </div>
 
-        <div className="space-y-5 p-4">
-          {Object.entries(optionGroups).map(([group, entries]) => (
-            <div key={group}>
-              <h3 className="mb-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                {group}
-              </h3>
-              <div className="grid gap-2">
-                {entries.map((option) => (
-                  <label
-                    key={option.id}
-                    className={cn(
-                      'flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-colors',
-                      selectedOptions.some((e) => e.id === option.id)
-                        ? 'border-primary/40 bg-primary/6'
-                        : 'border-border hover:border-border/80 hover:bg-muted/40'
-                    )}
-                  >
-                    <span className="text-sm font-medium">{option.optionName}</span>
-                    <span className="flex items-center gap-3">
-                      {option.priceUsd && Number(option.priceUsd) > 0 ? (
-                        <span className="text-xs text-muted-foreground">
-                          +{usd(option.priceUsd)}
-                        </span>
-                      ) : null}
-                      <div
-                        className={cn(
-                          'flex h-4 w-4 items-center justify-center rounded-full border-2 transition-colors',
-                          selectedOptions.some((e) => e.id === option.id)
-                            ? 'border-primary bg-primary'
-                            : 'border-border'
-                        )}
-                      >
-                        {selectedOptions.some((e) => e.id === option.id) ? (
-                          <div className="h-1.5 w-1.5 rounded-full bg-primary-foreground" />
-                        ) : null}
-                      </div>
-                      <input
-                        type="radio"
-                        name={group}
-                        checked={selectedOptions.some((e) => e.id === option.id)}
-                        onChange={() => chooseOption(option)}
-                        className="sr-only"
-                      />
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          ))}
+        {/* Step indicator */}
+        {(hasSpiceLevels || hasAddons) && (
+          <div className="border-b border-border/60 px-4 py-3 text-center text-xs font-semibold text-muted-foreground">
+            {hasSpiceLevels ? (
+              <span className={showingSpiceStep ? 'text-primary' : ''}>
+                1 · {t('spiceLevels')}
+              </span>
+            ) : null}
+            {hasSpiceLevels && hasAddons ? <span className="mx-2">/</span> : null}
+            {hasAddons ? (
+              <span className={!showingSpiceStep ? 'text-primary' : ''}>
+                {hasSpiceLevels ? '2' : '1'} · {t('addExtras')}
+              </span>
+            ) : null}
+          </div>
+        )}
 
-          {addons.length ? (
-            <div>
-              <h3 className="mb-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                Add-ons
-              </h3>
-              <div className="grid gap-2">
-                {addons.map((addon) => {
-                  const checked = selectedAddons.some((e) => e.id === addon.id);
-                  return (
+        <div className="space-y-5 p-4">
+          {/* STEP 1: Spice Level Selection */}
+          {showingSpiceStep ? (
+            <>
+              <div>
+                <h3 className="mb-3 text-base font-bold">{t('chooseSpiceLevel')}</h3>
+                <div className="grid gap-2">
+                  {availableSpiceLevels.map((spice) => (
                     <label
-                      key={addon.id}
+                      key={spice.id}
                       className={cn(
-                        'flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-colors',
-                        checked
-                          ? 'border-primary/40 bg-primary/6'
-                          : 'border-border hover:bg-muted/40'
+                        'flex cursor-pointer items-center justify-between rounded-xl border-2 p-3 transition-colors',
+                        selectedSpiceLevel?.id === spice.id
+                          ? 'border-[#0f8a7f] bg-[#0f8a7f]/10'
+                          : 'border-border hover:border-border/80 hover:bg-muted/40'
                       )}
                     >
-                      <span className="text-sm font-medium">{addon.name}</span>
+                      <span className="text-sm font-semibold">{spiceLevelLabel(spice)}</span>
                       <span className="flex items-center gap-3">
                         <span className="text-xs text-muted-foreground">
-                          +{usd(addon.priceUsd)}
+                          {formatModifierPrice(spice.priceUsd, t)}
                         </span>
-                        <div
-                          className={cn(
-                            'flex h-4 w-4 items-center justify-center rounded border-2 transition-colors',
-                            checked ? 'border-primary bg-primary' : 'border-border'
-                          )}
-                        >
-                          {checked ? (
-                            <div className="h-2 w-2 rounded-sm bg-primary-foreground" />
-                          ) : null}
-                        </div>
                         <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggleAddon(addon)}
+                          type="radio"
+                          name="spice"
+                          checked={selectedSpiceLevel?.id === spice.id}
+                          onChange={() => setSelectedSpiceLevel(spice)}
                           className="sr-only"
                         />
                       </span>
                     </label>
-                  );
-                })}
+                  ))}
+                </div>
               </div>
-            </div>
-          ) : null}
+              {quantityAndPrice}
+            </>
+          ) : (
+            <>
+              {hasAddons ? (
+                <div>
+                  <h3 className="mb-3 text-base font-bold">{t('addExtras')}</h3>
+                  <div className="grid gap-2">
+                    {addons.map((addon) => {
+                      const checked = selectedAddons.some((e) => e.id === addon.id);
+                      const addonItem = selectedAddons.find((e) => e.id === addon.id);
+                      return (
+                        <label
+                          key={addon.id}
+                          className={cn(
+                            'flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-colors',
+                            checked
+                              ? 'border-[#0f8a7f] bg-[#0f8a7f]/10'
+                              : 'border-border hover:bg-muted/40'
+                          )}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <span className="text-sm font-semibold">{addon.name}</span>
+                            <span className="ml-2 text-xs text-muted-foreground">
+                              {formatModifierPrice(addon.priceUsd, t)}
+                            </span>
+                          </div>
+                          {checked && addon.hasQuantity ? (
+                            <div className="ml-2 flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  changeAddonQuantity(addon.id, -1);
+                                }}
+                                className="flex h-6 w-6 items-center justify-center rounded border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
+                              >
+                                <Minus className="h-3 w-3" />
+                              </button>
+                              <span className="w-5 text-center text-xs font-semibold">
+                                {addonItem?.quantity || 1}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  changeAddonQuantity(addon.id, 1);
+                                }}
+                                className="flex h-6 w-6 items-center justify-center rounded border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
+                              >
+                                <Plus className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ) : null}
+                          <div
+                            className={cn(
+                              'ml-2 flex h-4 w-4 shrink-0 items-center justify-center rounded border-2 transition-colors',
+                              checked ? 'border-primary bg-primary' : 'border-border'
+                            )}
+                          >
+                            {checked ? (
+                              <div className="h-2 w-2 rounded-sm bg-primary-foreground" />
+                            ) : null}
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleAddon(addon)}
+                            className="sr-only"
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
 
-          <div>
-            <h3 className="mb-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              {t('specialInstructions')}
-            </h3>
-            <Textarea
-              value={specialInstructions}
-              onChange={(e) => setSpecialInstructions(e.target.value)}
-              placeholder="Allergies, preferences, notes…"
-              className="rounded-xl text-sm"
-              rows={2}
-            />
-          </div>
-
-          {/* Qty + price */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setQuantity(Math.max(1, quantity - 1))}
-                className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
-                aria-label="Decrease"
-              >
-                <Minus className="h-4 w-4" />
-              </button>
-              <span className="w-8 text-center text-base font-bold">{quantity}</span>
-              <button
-                onClick={() => setQuantity(quantity + 1)}
-                className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
-                aria-label="Increase"
-              >
-                <Plus className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="text-right">
-              <div className="text-lg font-bold">{usd(lineUsd)}</div>
-              <div className="text-xs text-muted-foreground">{usd(unitUsd)} each</div>
-            </div>
-          </div>
+              {/* Special Instructions */}
+              <div>
+                <h3 className="mb-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  {t('specialInstructions')}
+                </h3>
+                <Textarea
+                  value={specialInstructions}
+                  onChange={(e) => setSpecialInstructions(e.target.value)}
+                  placeholder={t('specialInstructions')}
+                  className="rounded-xl text-sm"
+                  rows={2}
+                />
+              </div>
+              {quantityAndPrice}
+            </>
+          )}
         </div>
 
         {/* Footer actions */}
         <div className="flex gap-2.5 border-t border-border/60 p-4">
-          <Button variant="outline" className="h-11 flex-1 rounded-xl" onClick={onClose}>
-            {t('cancel')}
-          </Button>
-          <Button
-            className="h-11 flex-1 rounded-xl font-semibold shadow-sm"
-            onClick={() =>
-              onAdd({
-                ...item,
-                quantity,
-                spiceLevel,
-                optionIds: selectedOptions.map((o) => o.id),
-                addons: selectedAddons,
-                unitUsd,
-                addonTotalUsd,
-                lineUsd,
-                specialInstructions,
-              })
-            }
-          >
-            {t('addToCart')} · {usd(lineUsd)}
-          </Button>
+          {!showingSpiceStep && hasSpiceLevels ? (
+            <>
+              <Button
+                variant="outline"
+                className="h-11 flex-1 rounded-xl"
+                onClick={() => setCurrentStep(1)}
+              >
+                {t('back')}
+              </Button>
+              <Button
+                className="h-11 flex-1 rounded-xl font-semibold shadow-sm"
+                onClick={addItemToCart}
+                disabled={addDisabled}
+              >
+                {t('addToCart')} · {usd(lineUsd)}
+              </Button>
+            </>
+          ) : showingSpiceStep && hasAddons ? (
+            <>
+              <Button
+                variant="outline"
+                className="h-11 flex-1 rounded-xl"
+                onClick={onClose}
+              >
+                {t('cancel')}
+              </Button>
+              <Button
+                className="h-11 flex-1 rounded-xl font-semibold shadow-sm"
+                onClick={nextStep}
+                disabled={addDisabled}
+              >
+                {t('next')}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                className="h-11 flex-1 rounded-xl"
+                onClick={onClose}
+              >
+                {t('cancel')}
+              </Button>
+              <Button
+                className="h-11 flex-1 rounded-xl font-semibold shadow-sm"
+                onClick={addItemToCart}
+                disabled={addDisabled}
+              >
+                {t('addToCart')} · {usd(lineUsd)}
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </div>
   );
 }
+
+
 
 /* ── Helpers ──────────────────────────────────────────────── */
 function customerStorageKey(tableNumber, bucket) {
@@ -2280,6 +2370,46 @@ function groupBy(items, key) {
     groups[value].push(item);
     return groups;
   }, {});
+}
+
+function isDefault(entry) {
+  return entry?.isDefault === true || entry?.isDefault === 'true';
+}
+
+function addonMaxQuantity(addon) {
+  return Math.max(1, Number(addon?.maxQuantity || addon?.maxQty || 10));
+}
+
+function addonSelectionMax(addon) {
+  return Math.min(5, addonMaxQuantity(addon));
+}
+
+function defaultAddonQuantity(addon) {
+  return addon?.hasQuantity ? Math.min(1, addonSelectionMax(addon)) : 1;
+}
+
+function selectedAddonPayload(addon) {
+  return {
+    id: addon.id,
+    name: addon.name,
+    priceUsd: Number(addon.priceUsd || 0),
+    quantity: defaultAddonQuantity(addon),
+    hasQuantity: Boolean(addon.hasQuantity),
+  };
+}
+
+function spiceLevelLabel(spice) {
+  return spice?.name || spice?.optionName || '';
+}
+
+function formatModifierPrice(value, t) {
+  return Number(value || 0) > 0 ? `+${usd(value)}` : t('free');
+}
+
+function formatAddonDetail(addon) {
+  const quantity = Number(addon?.quantity || 1);
+  const name = addon.name || addon.addonName || '';
+  return quantity > 1 ? `${name} x${quantity}` : name;
 }
 
 function priceMatches(item, filter) {
@@ -2373,19 +2503,6 @@ function paidWaitingMinutes(order, payment, now = Date.now()) {
   return Math.max(0, Math.floor((now - baseTime) / 60000));
 }
 
-function canOpenMobilePaymentApp() {
-  if (typeof navigator === 'undefined') return false;
-  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
-}
-
-function isValidPaymentAppUrl(url) {
-  try {
-    return new URL(url).protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
 function promoDiscountForSubtotal(promo, subtotalUsd) {
   if (!promo) return 0;
   const subtotal = Number(subtotalUsd || 0);
@@ -2408,14 +2525,14 @@ function formatPromoValue(promo) {
   return `${usd(promo.discountValue)} off`;
 }
 
-function downloadPaymentQrImage(order, payment) {
+function downloadPaymentQrImage(order, payment, t) {
   const svg = document.querySelector(`[data-payment-qr="${payment.id}"] svg`);
   if (!svg) return;
 
   const svgText = new XMLSerializer().serializeToString(svg);
   const svgUrl = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }));
-  Promise.all([loadCanvasImage(svgUrl), loadCanvasImage('/logo.png').catch(() => null)])
-    .then(([qrImage, logoImage]) => {
+  loadCanvasImage(svgUrl)
+    .then((qrImage) => {
       const canvas = document.createElement('canvas');
       canvas.width = 400;
       canvas.height = 500;
@@ -2425,30 +2542,23 @@ function downloadPaymentQrImage(order, payment) {
         return;
       }
 
-      const tableText = order?.tableNumber ? `Table ${order.tableNumber}` : '';
+      const tableText = order?.tableNumber ? `${t('table')} ${order.tableNumber}` : '';
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      if (logoImage) {
-        ctx.drawImage(logoImage, canvas.width / 2 - 28, 24, 56, 56);
-      }
-
-      ctx.fillStyle = '#111827';
-      ctx.font = '700 20px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('HappyBoat KHQR', canvas.width / 2, logoImage ? 105 : 44);
+      drawHappyBoatQrHeader(ctx, canvas.width);
 
       ctx.font = '500 13px sans-serif';
       ctx.fillStyle = '#4b5563';
       ctx.fillText(
-        [tableText, order?.orderNumber || 'Order', payment.paymentNumber]
+        [tableText, order?.orderNumber || t('order'), payment.paymentNumber]
           .filter(Boolean)
           .join(' · '),
         canvas.width / 2,
-        logoImage ? 130 : 69
+        122
       );
 
-      ctx.drawImage(qrImage, 76, 154, 248, 248);
+      ctx.drawImage(qrImage, 76, 148, 248, 248);
 
       ctx.font = '700 18px sans-serif';
       ctx.fillStyle = '#111827';
@@ -2464,9 +2574,24 @@ function downloadPaymentQrImage(order, payment) {
           blob,
           `${order?.orderNumber || payment.paymentNumber}-khqr.png`
         );
+        gooeyToast.success(t('qrImageSaved'), goeyToastOptions());
       }, 'image/png');
     })
     .catch(() => URL.revokeObjectURL(svgUrl));
+}
+
+function drawHappyBoatQrHeader(ctx, width) {
+  ctx.save();
+  ctx.fillStyle = '#e31b23';
+  ctx.fillRect(0, 0, width, 74);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '800 25px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Happy Boat QR', width / 2, 46);
+  ctx.fillStyle = '#111827';
+  ctx.font = '700 20px sans-serif';
+  ctx.fillText('KHQR', width / 2, 100);
+  ctx.restore();
 }
 
 function loadCanvasImage(src) {
@@ -2484,7 +2609,7 @@ async function saveImageToPhonePhotos(blob, filename) {
     try {
       await navigator.share({
         files: [file],
-        title: 'HappyBoat KHQR',
+        title: 'Bakong KHQR',
         text: 'Save this KHQR image to Photos.',
       });
       return;
