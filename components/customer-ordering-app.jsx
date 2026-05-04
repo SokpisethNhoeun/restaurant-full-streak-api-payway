@@ -1341,12 +1341,14 @@ function CartLineItem({ item, onDecrease, onIncrease, onRemove, controlSize = 's
       </button>
       <div className="min-w-0 flex-1">
         <h3 className="line-clamp-2 text-base font-bold leading-snug">{item.name}</h3>
-        {item.spiceLevelName && item.spiceLevelName.toUpperCase() !== 'NORMAL' ? (
-          <p className="mt-0.5 text-xs text-muted-foreground">{item.spiceLevelName}</p>
-        ) : null}
-        {item.addons?.length ? (
+        {orderItemSpiceLabel(item) || item.addons?.length ? (
           <div className="mt-1 space-y-0.5">
-            {item.addons.map((addon, index) => (
+            {orderItemSpiceLabel(item) ? (
+              <p className="text-xs text-muted-foreground">
+                {t('spice')}: {orderItemSpiceLabel(item)}
+              </p>
+            ) : null}
+            {(item.addons || []).map((addon, index) => (
               <p key={addon.id || `${addon.name}-${index}`} className="text-xs text-muted-foreground">
                 + {formatAddonDetail(addon)}
               </p>
@@ -1387,6 +1389,7 @@ function CartLineItem({ item, onDecrease, onIncrease, onRemove, controlSize = 's
 }
 
 function OrderDetailMiniItems({ order }) {
+  const { t } = useLanguage();
   if (!order.items?.length) return null;
 
   return (
@@ -1405,12 +1408,14 @@ function OrderDetailMiniItems({ order }) {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-bold leading-tight">{item.name || item.itemName}</p>
             <p className="text-xs text-muted-foreground">x{item.quantity}</p>
-            {item.spiceLevelName && item.spiceLevelName.toUpperCase() !== 'NORMAL' ? (
-              <p className="mt-1 text-xs text-muted-foreground">{item.spiceLevelName}</p>
-            ) : null}
-            {item.addons?.length ? (
+            {orderItemSpiceLabel(item) || item.addons?.length ? (
               <div className="mt-1 space-y-0.5">
-                {item.addons.map((addon, addonIndex) => (
+                {orderItemSpiceLabel(item) ? (
+                  <p className="text-xs text-muted-foreground">
+                    {t('spice')}: {orderItemSpiceLabel(item)}
+                  </p>
+                ) : null}
+                {(item.addons || []).map((addon, addonIndex) => (
                   <p
                     key={addon.id || addon.addonId || `${addon.name}-${addonIndex}`}
                     className="text-xs text-muted-foreground"
@@ -1976,7 +1981,6 @@ function CustomizeItem({ item, addons, spiceLevels = [], options, onClose, onAdd
   );
   const hasSpiceLevels = availableSpiceLevels.length > 0;
   const hasAddons = addons.length > 0;
-  const initialStep = hasSpiceLevels ? 1 : 2;
   const defaultSpiceLevel = useMemo(
     () =>
       availableSpiceLevels.find((spice) => isDefault(spice)) ||
@@ -1993,14 +1997,12 @@ function CustomizeItem({ item, addons, spiceLevels = [], options, onClose, onAdd
   );
 
   const [quantity, setQuantity] = useState(1);
-  const [currentStep, setCurrentStep] = useState(initialStep);
   const [selectedSpiceLevel, setSelectedSpiceLevel] = useState(defaultSpiceLevel);
   const [selectedAddons, setSelectedAddons] = useState(defaultAddons);
   const [specialInstructions, setSpecialInstructions] = useState('');
 
   const spiceRequired =
     Boolean(item.isSpiceRequired) || availableSpiceLevels.some((spice) => Boolean(spice.required));
-  const showingSpiceStep = currentStep === 1 && hasSpiceLevels;
   const unitUsd = Number(item.priceUsd || 0) + Number(selectedSpiceLevel?.priceUsd || 0);
   const addonTotalUsd = selectedAddons.reduce(
     (sum, addon) => sum + Number(addon.priceUsd || 0) * Number(addon.quantity || 1),
@@ -2027,12 +2029,6 @@ function CustomizeItem({ item, addons, spiceLevels = [], options, onClose, onAdd
       lineUsd,
       specialInstructions,
     });
-  }
-
-  function nextStep() {
-    if (showingSpiceStep && !addDisabled) {
-      setCurrentStep(2);
-    }
   }
 
   function toggleAddon(addon) {
@@ -2111,206 +2107,146 @@ function CustomizeItem({ item, addons, spiceLevels = [], options, onClose, onAdd
           </div>
         </div>
 
-        {/* Step indicator */}
-        {(hasSpiceLevels || hasAddons) && (
-          <div className="border-b border-border/60 px-4 py-3 text-center text-xs font-semibold text-muted-foreground">
-            {hasSpiceLevels ? (
-              <span className={showingSpiceStep ? 'text-primary' : ''}>
-                1 · {t('spiceLevels')}
-              </span>
-            ) : null}
-            {hasSpiceLevels && hasAddons ? <span className="mx-2">/</span> : null}
-            {hasAddons ? (
-              <span className={!showingSpiceStep ? 'text-primary' : ''}>
-                {hasSpiceLevels ? '2' : '1'} · {t('addExtras')}
-              </span>
-            ) : null}
-          </div>
-        )}
-
         <div className="space-y-5 p-4">
-          {/* STEP 1: Spice Level Selection */}
-          {showingSpiceStep ? (
-            <>
-              <div>
-                <h3 className="mb-3 text-base font-bold">{t('chooseSpiceLevel')}</h3>
-                <div className="grid gap-2">
-                  {availableSpiceLevels.map((spice) => (
+          {hasSpiceLevels ? (
+            <div>
+              <h3 className="mb-3 text-base font-bold">{t('chooseSpiceLevel')}</h3>
+              <div className="grid gap-2">
+                {availableSpiceLevels.map((spice) => (
+                  <label
+                    key={spice.id}
+                    className={cn(
+                      'flex cursor-pointer items-center justify-between rounded-xl border-2 p-3 transition-colors',
+                      selectedSpiceLevel?.id === spice.id
+                        ? 'border-[#0f8a7f] bg-[#0f8a7f]/10'
+                        : 'border-border hover:border-border/80 hover:bg-muted/40'
+                    )}
+                  >
+                    <span className="text-sm font-semibold">{spiceLevelLabel(spice)}</span>
+                    <span className="flex items-center gap-3">
+                      <span className="text-xs text-muted-foreground">
+                        {formatModifierPrice(spice.priceUsd, t)}
+                      </span>
+                      <input
+                        type="radio"
+                        name="spice"
+                        checked={selectedSpiceLevel?.id === spice.id}
+                        onChange={() => setSelectedSpiceLevel(spice)}
+                        className="sr-only"
+                      />
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {hasAddons ? (
+            <div>
+              <h3 className="mb-3 text-base font-bold">{t('addExtras')}</h3>
+              <div className="grid gap-2">
+                {addons.map((addon) => {
+                  const checked = selectedAddons.some((e) => e.id === addon.id);
+                  const addonItem = selectedAddons.find((e) => e.id === addon.id);
+                  return (
                     <label
-                      key={spice.id}
+                      key={addon.id}
                       className={cn(
-                        'flex cursor-pointer items-center justify-between rounded-xl border-2 p-3 transition-colors',
-                        selectedSpiceLevel?.id === spice.id
+                        'flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-colors',
+                        checked
                           ? 'border-[#0f8a7f] bg-[#0f8a7f]/10'
-                          : 'border-border hover:border-border/80 hover:bg-muted/40'
+                          : 'border-border hover:bg-muted/40'
                       )}
                     >
-                      <span className="text-sm font-semibold">{spiceLevelLabel(spice)}</span>
-                      <span className="flex items-center gap-3">
-                        <span className="text-xs text-muted-foreground">
-                          {formatModifierPrice(spice.priceUsd, t)}
+                      <div className="min-w-0 flex-1">
+                        <span className="text-sm font-semibold">{addon.name}</span>
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          {formatModifierPrice(addon.priceUsd, t)}
                         </span>
-                        <input
-                          type="radio"
-                          name="spice"
-                          checked={selectedSpiceLevel?.id === spice.id}
-                          onChange={() => setSelectedSpiceLevel(spice)}
-                          className="sr-only"
-                        />
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              {quantityAndPrice}
-            </>
-          ) : (
-            <>
-              {hasAddons ? (
-                <div>
-                  <h3 className="mb-3 text-base font-bold">{t('addExtras')}</h3>
-                  <div className="grid gap-2">
-                    {addons.map((addon) => {
-                      const checked = selectedAddons.some((e) => e.id === addon.id);
-                      const addonItem = selectedAddons.find((e) => e.id === addon.id);
-                      return (
-                        <label
-                          key={addon.id}
-                          className={cn(
-                            'flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-colors',
-                            checked
-                              ? 'border-[#0f8a7f] bg-[#0f8a7f]/10'
-                              : 'border-border hover:bg-muted/40'
-                          )}
-                        >
-                          <div className="min-w-0 flex-1">
-                            <span className="text-sm font-semibold">{addon.name}</span>
-                            <span className="ml-2 text-xs text-muted-foreground">
-                              {formatModifierPrice(addon.priceUsd, t)}
-                            </span>
-                          </div>
-                          {checked && addon.hasQuantity ? (
-                            <div className="ml-2 flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  changeAddonQuantity(addon.id, -1);
-                                }}
-                                className="flex h-6 w-6 items-center justify-center rounded border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
-                              >
-                                <Minus className="h-3 w-3" />
-                              </button>
-                              <span className="w-5 text-center text-xs font-semibold">
-                                {addonItem?.quantity || 1}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  changeAddonQuantity(addon.id, 1);
-                                }}
-                                className="flex h-6 w-6 items-center justify-center rounded border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
-                              >
-                                <Plus className="h-3 w-3" />
-                              </button>
-                            </div>
-                          ) : null}
-                          <div
-                            className={cn(
-                              'ml-2 flex h-4 w-4 shrink-0 items-center justify-center rounded border-2 transition-colors',
-                              checked ? 'border-primary bg-primary' : 'border-border'
-                            )}
+                      </div>
+                      {checked && addon.hasQuantity ? (
+                        <div className="ml-2 flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              changeAddonQuantity(addon.id, -1);
+                            }}
+                            className="flex h-6 w-6 items-center justify-center rounded border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
+                            aria-label={t('decrease')}
                           >
-                            {checked ? (
-                              <div className="h-2 w-2 rounded-sm bg-primary-foreground" />
-                            ) : null}
-                          </div>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleAddon(addon)}
-                            className="sr-only"
-                          />
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
-
-              {/* Special Instructions */}
-              <div>
-                <h3 className="mb-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                  {t('specialInstructions')}
-                </h3>
-                <Textarea
-                  value={specialInstructions}
-                  onChange={(e) => setSpecialInstructions(e.target.value)}
-                  placeholder={t('specialInstructions')}
-                  className="rounded-xl text-sm"
-                  rows={2}
-                />
+                            <Minus className="h-3 w-3" />
+                          </button>
+                          <span className="w-5 text-center text-xs font-semibold">
+                            {addonItem?.quantity || 1}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              changeAddonQuantity(addon.id, 1);
+                            }}
+                            className="flex h-6 w-6 items-center justify-center rounded border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
+                            aria-label={t('increase')}
+                          >
+                            <Plus className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ) : null}
+                      <div
+                        className={cn(
+                          'ml-2 flex h-4 w-4 shrink-0 items-center justify-center rounded border-2 transition-colors',
+                          checked ? 'border-primary bg-primary' : 'border-border'
+                        )}
+                      >
+                        {checked ? (
+                          <div className="h-2 w-2 rounded-sm bg-primary-foreground" />
+                        ) : null}
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleAddon(addon)}
+                        className="sr-only"
+                      />
+                    </label>
+                  );
+                })}
               </div>
-              {quantityAndPrice}
-            </>
-          )}
+            </div>
+          ) : null}
+
+          <div>
+            <h3 className="mb-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              {t('specialInstructions')}
+            </h3>
+            <Textarea
+              value={specialInstructions}
+              onChange={(e) => setSpecialInstructions(e.target.value)}
+              placeholder={t('specialInstructions')}
+              className="rounded-xl text-sm"
+              rows={2}
+            />
+          </div>
+          {quantityAndPrice}
         </div>
 
         {/* Footer actions */}
         <div className="flex gap-2.5 border-t border-border/60 p-4">
-          {!showingSpiceStep && hasSpiceLevels ? (
-            <>
-              <Button
-                variant="outline"
-                className="h-11 flex-1 rounded-xl"
-                onClick={() => setCurrentStep(1)}
-              >
-                {t('back')}
-              </Button>
-              <Button
-                className="h-11 flex-1 rounded-xl font-semibold shadow-sm"
-                onClick={addItemToCart}
-                disabled={addDisabled}
-              >
-                {t('addToCart')} · {usd(lineUsd)}
-              </Button>
-            </>
-          ) : showingSpiceStep && hasAddons ? (
-            <>
-              <Button
-                variant="outline"
-                className="h-11 flex-1 rounded-xl"
-                onClick={onClose}
-              >
-                {t('cancel')}
-              </Button>
-              <Button
-                className="h-11 flex-1 rounded-xl font-semibold shadow-sm"
-                onClick={nextStep}
-                disabled={addDisabled}
-              >
-                {t('next')}
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button
-                variant="outline"
-                className="h-11 flex-1 rounded-xl"
-                onClick={onClose}
-              >
-                {t('cancel')}
-              </Button>
-              <Button
-                className="h-11 flex-1 rounded-xl font-semibold shadow-sm"
-                onClick={addItemToCart}
-                disabled={addDisabled}
-              >
-                {t('addToCart')} · {usd(lineUsd)}
-              </Button>
-            </>
-          )}
+          <Button
+            variant="outline"
+            className="h-11 flex-1 rounded-xl"
+            onClick={onClose}
+          >
+            {t('cancel')}
+          </Button>
+          <Button
+            className="h-11 flex-1 rounded-xl font-semibold shadow-sm"
+            onClick={addItemToCart}
+            disabled={addDisabled}
+          >
+            {t('addToCart')} · {usd(lineUsd)}
+          </Button>
         </div>
       </div>
     </div>
@@ -2396,6 +2332,14 @@ function selectedAddonPayload(addon) {
     quantity: defaultAddonQuantity(addon),
     hasQuantity: Boolean(addon.hasQuantity),
   };
+}
+
+function orderItemSpiceLabel(item) {
+  const spiceLevel = String(item?.spiceLevel || '').trim();
+  const spiceLabel = String(item?.spiceLevelName || spiceLevel).trim();
+  if (!spiceLabel) return '';
+  if (spiceLevel.toUpperCase() === 'NORMAL' || spiceLabel.toUpperCase() === 'NORMAL') return '';
+  return spiceLabel;
 }
 
 function spiceLevelLabel(spice) {

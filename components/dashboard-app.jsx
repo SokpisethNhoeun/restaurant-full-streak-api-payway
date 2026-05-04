@@ -5,12 +5,37 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
 import { Input, Select, Textarea } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarTrigger,
+  useSidebar,
+} from '@/components/ui/sidebar';
 import { API_BASE, WS_URL, api } from '@/lib/api';
 import { goeyToastOptions } from '@/lib/goey-toast-options';
-import { displayUsd, khr, tags, usd } from '@/lib/utils';
+import { cn, displayUsd, formatDuration, khr, tags, usd } from '@/lib/utils';
 import { Client } from '@stomp/stompjs';
-import { Switch as HeroSwitch } from '@heroui/react';
+import { InputOtp, Switch as HeroSwitch } from '@heroui/react';
 import { gooeyToast } from 'goey-toast';
 import {
   ArrowUpDown,
@@ -22,16 +47,19 @@ import {
   ChefHat,
   ChevronDown,
   ChevronUp,
+  CircleUserRound,
   Clock,
   CreditCard,
   Download,
   Filter,
   LogIn,
+  LogOut,
   Pencil,
   Plus,
   Printer,
   RefreshCw,
   Search,
+  Store,
   Table2,
   Upload,
   Users,
@@ -95,6 +123,19 @@ const DONUT_COLORS = ['#0f8a7f', '#f59e0b', '#2563eb', '#dc2626', '#7c3aed', '#0
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 const ALLOWED_UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
+function createMerchantSettingsForm(settings = {}) {
+  return {
+    accessToken: '',
+    merchantAccountId: settings.merchantAccountId || '',
+    merchantName: settings.merchantName || '',
+    merchantCity: settings.merchantCity || '',
+    defaultCurrency: settings.defaultCurrency || 'KHR',
+    paymentExpirationMinutes: settings.paymentExpirationMinutes ?? 10,
+    accessTokenPreview: settings.accessTokenPreview || '',
+    accessTokenConfigured: Boolean(settings.accessTokenConfigured),
+  };
+}
+
 function readDashboardToken() {
   if (typeof window === 'undefined') return null;
   return window.localStorage.getItem(DASHBOARD_TOKEN_KEY);
@@ -122,8 +163,22 @@ export default function DashboardApp() {
   const [otpVerifying, setOtpVerifying] = useState(false);
   const [otpResending, setOtpResending] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
+  const [username, setUsername] = useState('');
   const [userRole, setUserRole] = useState(null);
   const [tab, setTab] = useState('orders');
+  const [merchantDialogOpen, setMerchantDialogOpen] = useState(false);
+  const [merchantOtpSession, setMerchantOtpSession] = useState(null);
+  const [merchantOtpCode, setMerchantOtpCode] = useState('');
+  const [merchantOtpNow, setMerchantOtpNow] = useState(Date.now());
+  const [merchantOtpSending, setMerchantOtpSending] = useState(false);
+  const [merchantOtpVerifying, setMerchantOtpVerifying] = useState(false);
+  const [merchantOtpError, setMerchantOtpError] = useState('');
+  const [merchantOtpVerified, setMerchantOtpVerified] = useState(false);
+  const [merchantVerificationToken, setMerchantVerificationToken] = useState('');
+  const [merchantSettings, setMerchantSettings] = useState(() => createMerchantSettingsForm());
+  const [merchantSettingsLoading, setMerchantSettingsLoading] = useState(false);
+  const [merchantSettingsSaving, setMerchantSettingsSaving] = useState(false);
+  const [merchantSettingsMessage, setMerchantSettingsMessage] = useState('');
   const [orders, setOrders] = useState([]);
   const [kitchenItems, setKitchenItems] = useState([]);
   const [kitchenItemStatus, setKitchenItemStatus] = useState({});
@@ -180,6 +235,9 @@ export default function DashboardApp() {
       .then((data) => {
         if (mounted) {
           setSignedIn(true);
+          if (data?.username) {
+            setUsername(data.username);
+          }
           if (data?.role) {
             setUserRole(data.role);
           }
@@ -254,6 +312,24 @@ export default function DashboardApp() {
     return () => window.clearInterval(timer);
   }, [otpSession]);
 
+  useEffect(() => {
+    if (!merchantDialogOpen || !merchantOtpSession || merchantOtpVerified) return undefined;
+    setMerchantOtpNow(Date.now());
+    const timer = window.setInterval(() => setMerchantOtpNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [merchantDialogOpen, merchantOtpSession, merchantOtpVerified]);
+
+  useEffect(() => {
+    if (userRole === 'SUPER_ADMIN') return;
+    if (tab === 'accounts') {
+      setTab('orders');
+    }
+    if (merchantDialogOpen) {
+      closeMerchantDialog();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [merchantDialogOpen, tab, userRole]);
+
   async function request(path, options = {}) {
     try {
       return await api(path, {
@@ -311,6 +387,9 @@ export default function DashboardApp() {
     if (session?.token) {
       window.localStorage.setItem(DASHBOARD_TOKEN_KEY, session.token);
     }
+    if (session?.username) {
+      setUsername(session.username);
+    }
     if (session?.role) {
       setUserRole(session.role);
     }
@@ -360,6 +439,151 @@ export default function DashboardApp() {
       setOtpError(error.message || t('signInFailed'));
     } finally {
       setOtpResending(false);
+    }
+  }
+
+  async function logout() {
+    try {
+      await request('/api/admin/auth/logout', { method: 'POST' });
+    } catch {
+      // Logout should still clear the local dashboard session.
+    } finally {
+      clearDashboardSession();
+      setSignedIn(false);
+      setUsername('');
+      setUserRole(null);
+      setTab('orders');
+      setOtpSession(null);
+      closeMerchantDialog();
+    }
+  }
+
+  function openMerchantDialog() {
+    setMerchantDialogOpen(true);
+    setMerchantOtpSession(null);
+    setMerchantOtpCode('');
+    setMerchantOtpNow(Date.now());
+    setMerchantOtpError('');
+    setMerchantOtpVerified(false);
+    setMerchantVerificationToken('');
+    setMerchantSettings(createMerchantSettingsForm());
+    setMerchantSettingsMessage('');
+    setMerchantSettingsLoading(false);
+  }
+
+  function closeMerchantDialog() {
+    setMerchantDialogOpen(false);
+    setMerchantOtpSession(null);
+    setMerchantOtpCode('');
+    setMerchantOtpNow(Date.now());
+    setMerchantOtpError('');
+    setMerchantOtpVerified(false);
+    setMerchantVerificationToken('');
+    setMerchantSettings(createMerchantSettingsForm());
+    setMerchantSettingsMessage('');
+    setMerchantSettingsLoading(false);
+    setMerchantOtpSending(false);
+    setMerchantOtpVerifying(false);
+    setMerchantSettingsSaving(false);
+  }
+
+  function startMerchantOtpSession(challenge) {
+    const now = Date.now();
+    setMerchantOtpSession({
+      sessionToken: challenge.sessionToken,
+      expiresAt: now + Number(challenge.expiresInSeconds || 120) * 1000,
+    });
+    setMerchantOtpNow(now);
+    setMerchantOtpCode('');
+    setMerchantOtpError('');
+    setMerchantSettingsMessage('');
+    setMerchantOtpVerified(false);
+    setMerchantVerificationToken('');
+  }
+
+  async function sendMerchantOtp() {
+    if (merchantOtpSending) return;
+    if (merchantOtpSession && merchantOtpSecondsRemaining > 0 && !merchantOtpVerified) return;
+    setMerchantOtpSending(true);
+    setMerchantOtpError('');
+    setMerchantSettingsMessage('');
+    try {
+      const challenge = await request('/api/admin/settings/bakong/otp', { method: 'POST' });
+      startMerchantOtpSession(challenge);
+      setMerchantSettingsMessage(t('otpSent'));
+    } catch (error) {
+      setMerchantOtpError(error.message || t('otpSendFailed'));
+    } finally {
+      setMerchantOtpSending(false);
+    }
+  }
+
+  async function verifyMerchantOtp(code = merchantOtpCode) {
+    if (!merchantOtpSession || merchantOtpVerifying || merchantOtpVerified) return;
+    if (merchantOtpSecondsRemaining <= 0) {
+      setMerchantOtpError(t('otpExpiredRequestNew'));
+      return;
+    }
+    const normalizedCode = String(code || '').replace(/\D/g, '').slice(0, 6);
+    if (normalizedCode.length !== 6) return;
+    setMerchantOtpVerifying(true);
+    setMerchantOtpError('');
+    setMerchantSettingsMessage('');
+    try {
+      const verification = await request('/api/admin/settings/bakong/verify-otp', {
+        method: 'POST',
+        body: JSON.stringify({
+          sessionToken: merchantOtpSession.sessionToken,
+          otp: normalizedCode,
+        }),
+      });
+      setMerchantVerificationToken(verification.verificationToken || '');
+      setMerchantOtpVerified(true);
+      await loadMerchantSettings();
+    } catch (error) {
+      setMerchantOtpError(error.message || t('invalidOtp'));
+    } finally {
+      setMerchantOtpVerifying(false);
+    }
+  }
+
+  async function loadMerchantSettings() {
+    setMerchantSettingsLoading(true);
+    try {
+      const settings = await request('/api/admin/settings/bakong');
+      setMerchantSettings(createMerchantSettingsForm(settings));
+    } catch (error) {
+      setMerchantSettingsMessage(error.message || t('merchantDetailsLoadFailed'));
+    } finally {
+      setMerchantSettingsLoading(false);
+    }
+  }
+
+  async function saveMerchantSettings(event) {
+    event.preventDefault();
+    if (!merchantVerificationToken || merchantSettingsSaving) return;
+    setMerchantSettingsSaving(true);
+    setMerchantSettingsMessage('');
+    try {
+      const updated = await request('/api/admin/settings/bakong', {
+        method: 'PUT',
+        body: JSON.stringify({
+          verificationToken: merchantVerificationToken,
+          accessToken: merchantSettings.accessToken,
+          merchantAccountId: merchantSettings.merchantAccountId,
+          merchantName: merchantSettings.merchantName,
+          merchantCity: merchantSettings.merchantCity,
+          defaultCurrency: merchantSettings.defaultCurrency,
+          paymentExpirationMinutes: Number(merchantSettings.paymentExpirationMinutes || 10),
+        }),
+      });
+      setMerchantSettings(createMerchantSettingsForm(updated));
+      gooeyToast.success(t('merchantDetailsUpdated'), goeyToastOptions());
+      closeMerchantDialog();
+    } catch (error) {
+      setMerchantSettingsMessage(error.message || t('merchantDetailsUpdateFailed'));
+    } finally {
+      setMerchantSettingsSaving(false);
     }
   }
 
@@ -529,13 +753,6 @@ export default function DashboardApp() {
       if (didNotify) playSound('payment');
     }
   }
-  function formatDuration(seconds) {
-  const s = Math.max(0, Math.floor(seconds));
-  const minutes = Math.floor(s / 60);
-  const remainingSeconds = s % 60;
-  return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`;
-}
-
   function applyLivePayment(payment) {
     const previous = paymentsRef.current.find((entry) => entry.id === payment.id);
     const nextPayments = upsertById(paymentsRef.current, payment);
@@ -819,6 +1036,25 @@ export default function DashboardApp() {
     ? Math.max(0, Math.ceil((otpSession.resendAt - otpNow) / 1000))
     : 0;
   const otpComplete = otpDigits.every(Boolean);
+  const isSuperAdmin = userRole === 'SUPER_ADMIN';
+  const merchantOtpSecondsRemaining = merchantOtpSession
+    ? Math.max(0, Math.ceil((merchantOtpSession.expiresAt - merchantOtpNow) / 1000))
+    : 0;
+  const merchantOtpExpired =
+    Boolean(merchantOtpSession) && merchantOtpSecondsRemaining <= 0 && !merchantOtpVerified;
+  const dashboardSections = useMemo(
+    () => [
+      { id: 'orders', label: t('orders'), icon: Clock },
+      { id: 'kitchen', label: t('kitchen'), icon: ChefHat },
+      { id: 'menu', label: t('menu'), icon: Utensils },
+      { id: 'tables', label: t('tables'), icon: Table2 },
+      { id: 'payments', label: t('payments'), icon: CreditCard },
+      { id: 'promos', label: t('promos'), icon: BadgePercent },
+      { id: 'analytics', label: t('analytics'), icon: BarChart3 },
+      ...(isSuperAdmin ? [{ id: 'accounts', label: t('accounts'), icon: Users }] : []),
+    ],
+    [isSuperAdmin, t]
+  );
 
   useEffect(() => {
     if (!otpSession || !otpComplete || otpVerifying) return;
@@ -828,6 +1064,23 @@ export default function DashboardApp() {
     verifyOtp();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [otpComplete, otpDigits, otpSession, otpVerifying]);
+
+  useEffect(() => {
+    if (!merchantDialogOpen || !merchantOtpSession || merchantOtpVerified || merchantOtpVerifying) {
+      return;
+    }
+    if (merchantOtpCode.length === 6 && merchantOtpSecondsRemaining > 0) {
+      verifyMerchantOtp(merchantOtpCode);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    merchantDialogOpen,
+    merchantOtpCode,
+    merchantOtpSession,
+    merchantOtpSecondsRemaining,
+    merchantOtpVerified,
+    merchantOtpVerifying,
+  ]);
 
   if (!signedIn) {
     return (
@@ -960,153 +1213,438 @@ export default function DashboardApp() {
 
   return (
     <main className="min-h-screen bg-background">
-      <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <img src="/logo.png" alt="HappyBoat" className="h-10 w-10 rounded-md object-cover" />
-            <div>
-              <h1 className="text-lg font-semibold">HappyBoat</h1>
-              <p className="text-xs text-muted-foreground">{t('liveRestaurantOps')}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="hidden items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground sm:flex">
-              {liveState === 'connected' ? (
-                <Wifi className="h-3.5 w-3.5 text-primary" />
-              ) : (
-                <WifiOff className="h-3.5 w-3.5 text-secondary-foreground" />
-              )}
-              <span>{liveState === 'connected' ? t('live') : t('polling')}</span>
-              {lastUpdatedAt ? (
-                <span>
-                  {t('updated')} {formatClockTime(lastUpdatedAt)}
-                </span>
-              ) : null}
-            </div>
-            <LanguageToggle />
-            <Button
-              variant="outline"
-              className="px-3"
-              onClick={testSound}
-              aria-label={t('testOrderSound')}
-            >
-              {soundReady ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-              <span className="hidden sm:inline">{t('alert')}</span>
-            </Button>
-            <ThemeToggle />
-            <Button variant="outline" size="icon" onClick={loadAll} aria-label={t('refresh')}>
-              <RefreshCw className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </header>
+      <SidebarProvider defaultOpen>
+        <Sidebar>
+          <SidebarHeader>
+            <DashboardSidebarBrand />
+          </SidebarHeader>
+          <SidebarContent>
+            <SidebarGroup>
+              <SidebarGroupLabel>{t('dashboard')}</SidebarGroupLabel>
+              <SidebarMenu>
+                {dashboardSections.map((section) => (
+                  <SidebarMenuItem key={section.id}>
+                    <SidebarMenuButton
+                      active={tab === section.id}
+                      icon={section.icon}
+                      label={section.label}
+                      onClick={() => setTab(section.id)}
+                    >
+                      {section.label}
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+                {isSuperAdmin ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      active={merchantDialogOpen}
+                      icon={Store}
+                      label={t('changeMerchantDetails')}
+                      onClick={openMerchantDialog}
+                    >
+                      {t('changeMerchantDetails')}
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
+              </SidebarMenu>
+            </SidebarGroup>
+          </SidebarContent>
+        </Sidebar>
 
-      <div className="mx-auto max-w-7xl px-4 py-6">
-        <div className="mb-6 flex flex-wrap gap-2">
-          <TabButton
-            active={tab === 'orders'}
-            onClick={() => setTab('orders')}
-            icon={Clock}
-            label={t('orders')}
-          />
-          <TabButton
-            active={tab === 'kitchen'}
-            onClick={() => setTab('kitchen')}
-            icon={ChefHat}
-            label={t('kitchen')}
-          />
-          <TabButton
-            active={tab === 'menu'}
-            onClick={() => setTab('menu')}
-            icon={Utensils}
-            label={t('menu')}
-          />
-          <TabButton
-            active={tab === 'tables'}
-            onClick={() => setTab('tables')}
-            icon={Table2}
-            label={t('tables')}
-          />
-          <TabButton
-            active={tab === 'payments'}
-            onClick={() => setTab('payments')}
-            icon={CreditCard}
-            label={t('payments')}
-          />
-          <TabButton
-            active={tab === 'promos'}
-            onClick={() => setTab('promos')}
-            icon={BadgePercent}
-            label={t('promos')}
-          />
-          <TabButton
-            active={tab === 'analytics'}
-            onClick={() => setTab('analytics')}
-            icon={BarChart3}
-            label={t('analytics')}
-          />
-          {userRole === 'SUPER_ADMIN' ? (
-            <TabButton
-              active={tab === 'accounts'}
-              onClick={() => setTab('accounts')}
-              icon={Users}
-              label="Accounts"
-            />
-          ) : null}
-        </div>
+        <SidebarInset>
+          <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
+            <DashboardFrame className="flex items-center justify-between gap-3 py-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <SidebarTrigger className="shrink-0" />
+                <div className="min-w-0">
+                  <h1 className="truncate text-lg font-semibold">HappyBoat</h1>
+                  <p className="truncate text-xs text-muted-foreground">{t('liveRestaurantOps')}</p>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <div className="hidden items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground sm:flex">
+                  {liveState === 'connected' ? (
+                    <Wifi className="h-3.5 w-3.5 text-primary" />
+                  ) : (
+                    <WifiOff className="h-3.5 w-3.5 text-secondary-foreground" />
+                  )}
+                  <span>{liveState === 'connected' ? t('live') : t('polling')}</span>
+                  {lastUpdatedAt ? (
+                    <span>
+                      {t('updated')} {formatClockTime(lastUpdatedAt)}
+                    </span>
+                  ) : null}
+                </div>
+                <ProfileHoverCard username={username} role={userRole} onLogout={logout} />
+                <LanguageToggle />
+                <Button
+                  variant="outline"
+                  className="px-3"
+                  onClick={testSound}
+                  aria-label={t('testOrderSound')}
+                >
+                  {soundReady ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+                  <span className="hidden sm:inline">{t('alert')}</span>
+                </Button>
+                <ThemeToggle />
+                <Button variant="outline" size="icon" onClick={loadAll} aria-label={t('refresh')}>
+                  <RefreshCw className="h-4 w-4" />
+                </Button>
+              </div>
+            </DashboardFrame>
+          </header>
 
-        {tab === 'orders' ? (
-          <OrdersView
-            orders={orders}
-            selectedOrder={selectedOrder}
-            onSelect={loadOrder}
-            onClear={() => setSelectedOrder(null)}
-            onStatus={updateOrderStatus}
-            onItemStatus={updateOrderItemKitchenStatus}
-            kitchenItemStatus={kitchenItemStatus}
-            now={dashboardNow}
-          />
-        ) : null}
+          <DashboardFrame className="py-6">
+            {tab === 'orders' ? (
+              <OrdersView
+                orders={orders}
+                selectedOrder={selectedOrder}
+                onSelect={loadOrder}
+                onClear={() => setSelectedOrder(null)}
+                onStatus={updateOrderStatus}
+                onItemStatus={updateOrderItemKitchenStatus}
+                kitchenItemStatus={kitchenItemStatus}
+                now={dashboardNow}
+              />
+            ) : null}
 
-        {tab === 'kitchen' ? (
-          <KitchenView
-            items={kitchenItems}
-            statusMap={kitchenItemStatus}
-            onGroupStatus={updateKitchenGroupStatus}
-            onItemStatus={updateOrderItemKitchenStatus}
-            updatingItemIds={updatingKitchenItemIds}
-            now={dashboardNow}
-          />
-        ) : null}
+            {tab === 'kitchen' ? (
+              <KitchenView
+                items={kitchenItems}
+                statusMap={kitchenItemStatus}
+                onGroupStatus={updateKitchenGroupStatus}
+                onItemStatus={updateOrderItemKitchenStatus}
+                updatingItemIds={updatingKitchenItemIds}
+                now={dashboardNow}
+              />
+            ) : null}
 
-        {tab === 'menu' ? <MenuView menu={menu} request={request} reload={loadMenu} /> : null}
+            {tab === 'menu' ? <MenuView menu={menu} request={request} reload={loadMenu} /> : null}
 
-        {tab === 'tables' ? (
-          <TablesView tables={tables} request={request} reload={loadTables} />
-        ) : null}
+            {tab === 'tables' ? (
+              <TablesView tables={tables} request={request} reload={loadTables} />
+            ) : null}
 
-        {tab === 'payments' ? (
-          <PaymentsView payments={payments} request={request} reload={loadPayments} />
-        ) : null}
+            {tab === 'payments' ? (
+              <PaymentsView payments={payments} request={request} reload={loadPayments} />
+            ) : null}
 
-        {tab === 'promos' ? (
-          <PromoCodesView promos={promos} request={request} reload={loadPromos} />
-        ) : null}
+            {tab === 'promos' ? (
+              <PromoCodesView promos={promos} request={request} reload={loadPromos} />
+            ) : null}
 
-        {tab === 'analytics' ? (
-          <AnalyticsView
-            analytics={analytics}
-            error={analyticsError}
-            lastUpdatedAt={lastUpdatedAt}
-            onRefresh={loadAnalytics}
-          />
-        ) : null}
+            {tab === 'analytics' ? (
+              <AnalyticsView
+                analytics={analytics}
+                error={analyticsError}
+                lastUpdatedAt={lastUpdatedAt}
+                onRefresh={loadAnalytics}
+              />
+            ) : null}
 
-        {tab === 'accounts' && userRole === 'SUPER_ADMIN' ? (
-          <AdminAccountsView request={request} reload={loadAnalytics} />
-        ) : null}
-      </div>
+            {tab === 'accounts' && isSuperAdmin ? (
+              <AdminAccountsView request={request} reload={loadAnalytics} />
+            ) : null}
+          </DashboardFrame>
+        </SidebarInset>
+
+        <ChangeMerchantDetailsDialog
+          open={merchantDialogOpen}
+          onBack={closeMerchantDialog}
+          otpSession={merchantOtpSession}
+          otpCode={merchantOtpCode}
+          onOtpCodeChange={setMerchantOtpCode}
+          otpSecondsRemaining={merchantOtpSecondsRemaining}
+          otpExpired={merchantOtpExpired}
+          otpSending={merchantOtpSending}
+          otpVerifying={merchantOtpVerifying}
+          otpError={merchantOtpError}
+          otpVerified={merchantOtpVerified}
+          onSendOtp={sendMerchantOtp}
+          settings={merchantSettings}
+          onSettingsChange={setMerchantSettings}
+          settingsLoading={merchantSettingsLoading}
+          settingsSaving={merchantSettingsSaving}
+          settingsMessage={merchantSettingsMessage}
+          onSave={saveMerchantSettings}
+        />
+      </SidebarProvider>
     </main>
+  );
+}
+
+function DashboardSidebarBrand() {
+  const { open } = useSidebar();
+  const { t } = useLanguage();
+
+  return (
+    <div className="flex min-h-11 items-center gap-3">
+      <img src="/logo.png" alt="HappyBoat" className="h-10 w-10 shrink-0 rounded-md object-cover" />
+      <div className={cn("min-w-0 transition-opacity", !open && "sr-only")}>
+        <div className="truncate text-sm font-semibold">HappyBoat</div>
+        <div className="truncate text-xs text-muted-foreground">{t('liveRestaurantOps')}</div>
+      </div>
+    </div>
+  );
+}
+
+function DashboardFrame({ className, ...props }) {
+  const { open } = useSidebar();
+
+  return (
+    <div
+      className={cn(
+        "mx-auto w-full max-w-7xl px-4 transition-[max-width,padding,margin] duration-200",
+        !open && "xl:mx-0 xl:max-w-none xl:pl-3 xl:pr-4",
+        className
+      )}
+      {...props}
+    />
+  );
+}
+
+function ProfileHoverCard({ username, role, onLogout }) {
+  const displayName = profileDisplayName(username);
+
+  return (
+    <HoverCard openDelay={80} closeDelay={120}>
+      <HoverCardTrigger>
+        <Button type="button" variant="outline" className="max-w-40 px-3">
+          <CircleUserRound className="h-4 w-4 shrink-0" />
+          <span className="hidden max-w-24 truncate sm:inline">{displayName}</span>
+        </Button>
+      </HoverCardTrigger>
+      <HoverCardContent>
+        <div className="space-y-3">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <CircleUserRound className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">{displayName}</div>
+              <div className="mt-1 text-xs font-medium text-muted-foreground">Gmail</div>
+              <div className="truncate text-xs text-muted-foreground">{username || '-'}</div>
+              {role ? <div className="mt-1 text-xs text-muted-foreground">{role}</div> : null}
+            </div>
+          </div>
+          <Button type="button" variant="outline" className="w-full justify-start" onClick={onLogout}>
+            <LogOut className="h-4 w-4" />
+            Logout
+          </Button>
+        </div>
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
+
+function ChangeMerchantDetailsDialog({
+  open,
+  onBack,
+  otpSession,
+  otpCode,
+  onOtpCodeChange,
+  otpSecondsRemaining,
+  otpExpired,
+  otpSending,
+  otpVerifying,
+  otpError,
+  otpVerified,
+  onSendOtp,
+  settings,
+  onSettingsChange,
+  settingsLoading,
+  settingsSaving,
+  settingsMessage,
+  onSave,
+}) {
+  const { t } = useLanguage();
+  const sendDisabled = otpSending || (Boolean(otpSession) && otpSecondsRemaining > 0 && !otpVerified);
+  const otpDisabled = !otpSession || otpExpired || otpVerifying || otpVerified;
+
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => (!nextOpen ? onBack() : undefined)}>
+      <DialogContent className="sm:max-w-xl" showClose={false}>
+        {!otpVerified ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{t('verifyOtp')}</DialogTitle>
+              <DialogDescription>
+                {t('verifyIdentityMerchant')}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogBody className="space-y-4">
+              <div className="grid gap-2">
+                <Label>{t('verificationCode')}</Label>
+                <InputOtp
+                  aria-label={t('verificationCode')}
+                  autoFocus={Boolean(otpSession)}
+                  classNames={{
+                    base: "w-full",
+                    segmentWrapper: "justify-center gap-2",
+                    segment:
+                      "h-12 w-10 rounded-md border border-input bg-card text-lg font-semibold text-foreground shadow-none data-[active=true]:border-primary data-[active=true]:ring-2 data-[active=true]:ring-primary/20 sm:w-12",
+                    helperWrapper: "text-center",
+                    errorMessage: "text-destructive",
+                  }}
+                  isDisabled={otpDisabled}
+                  length={6}
+                  onValueChange={(value) => onOtpCodeChange(value.replace(/\D/g, '').slice(0, 6))}
+                  value={otpCode}
+                  variant="bordered"
+                />
+              </div>
+
+              {otpSession && !otpExpired ? (
+                <div className="rounded-md bg-muted px-3 py-2 text-center text-sm font-medium text-muted-foreground">
+                  {t('codeExpiresIn').replace('{time}', formatDuration(otpSecondsRemaining))}
+                </div>
+              ) : null}
+
+              {otpExpired ? (
+                <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {t('otpExpiredRequestNew')}
+                </div>
+              ) : null}
+
+              {otpError ? (
+                <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {otpError}
+                </div>
+              ) : null}
+
+              {settingsMessage && !otpError ? (
+                <div className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+                  {settingsMessage}
+                </div>
+              ) : null}
+
+              {otpVerifying ? (
+                <div className="rounded-md bg-muted px-3 py-2 text-center text-sm font-medium text-muted-foreground">
+                  {t('checking')}
+                </div>
+              ) : null}
+            </DialogBody>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={onBack}>
+                {t('back')}
+              </Button>
+              <Button type="button" onClick={onSendOtp} disabled={sendDisabled}>
+                {otpSending ? t('sending') : t('sendOtp')}
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <form onSubmit={onSave}>
+            <DialogHeader>
+              <DialogTitle>{t('changeMerchantDetails')}</DialogTitle>
+              <DialogDescription>
+                {t('bakongPaymentSettings')}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogBody className="space-y-4">
+              {settingsMessage ? (
+                <div className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+                  {settingsMessage}
+                </div>
+              ) : null}
+              <div className="grid gap-2">
+                <Label htmlFor="bakong-access-token">{t('bakongAccessToken')}</Label>
+                <Input
+                  id="bakong-access-token"
+                  value={settings.accessToken}
+                  onChange={(event) =>
+                    onSettingsChange({ ...settings, accessToken: event.target.value })
+                  }
+                  placeholder={settings.accessTokenPreview || t('accessToken')}
+                  type="password"
+                  disabled={settingsLoading || settingsSaving}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="bakong-merchant-account">{t('merchantAccountId')}</Label>
+                <Input
+                  id="bakong-merchant-account"
+                  value={settings.merchantAccountId}
+                  onChange={(event) =>
+                    onSettingsChange({ ...settings, merchantAccountId: event.target.value })
+                  }
+                  placeholder="merchant@bank"
+                  disabled={settingsLoading || settingsSaving}
+                  required
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="bakong-merchant-name">{t('merchantName')}</Label>
+                <Input
+                  id="bakong-merchant-name"
+                  value={settings.merchantName}
+                  onChange={(event) =>
+                    onSettingsChange({ ...settings, merchantName: event.target.value })
+                  }
+                  disabled={settingsLoading || settingsSaving}
+                  required
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="bakong-merchant-city">{t('merchantCity')}</Label>
+                <Input
+                  id="bakong-merchant-city"
+                  value={settings.merchantCity}
+                  onChange={(event) =>
+                    onSettingsChange({ ...settings, merchantCity: event.target.value })
+                  }
+                  disabled={settingsLoading || settingsSaving}
+                  required
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-2">
+                  <Label htmlFor="bakong-default-currency">{t('defaultCurrency')}</Label>
+                  <Select
+                    id="bakong-default-currency"
+                    value={settings.defaultCurrency}
+                    onChange={(event) =>
+                      onSettingsChange({ ...settings, defaultCurrency: event.target.value })
+                    }
+                    disabled={settingsLoading || settingsSaving}
+                    required
+                  >
+                    <option value="USD">USD</option>
+                    <option value="KHR">KHR</option>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="bakong-expiration">{t('expirationMinutes')}</Label>
+                  <Input
+                    id="bakong-expiration"
+                    value={settings.paymentExpirationMinutes}
+                    onChange={(event) =>
+                      onSettingsChange({
+                        ...settings,
+                        paymentExpirationMinutes: event.target.value,
+                      })
+                    }
+                    disabled={settingsLoading || settingsSaving}
+                    max="120"
+                    min="1"
+                    required
+                    type="number"
+                  />
+                </div>
+              </div>
+            </DialogBody>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={onBack}>
+                {t('back')}
+              </Button>
+              <Button type="submit" disabled={settingsLoading || settingsSaving}>
+                {settingsSaving ? t('saving') : t('save')}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1508,6 +2046,8 @@ function OrderDetailContent({
           <div key={item.id} className="rounded-md border border-border p-3 text-sm">
             {(() => {
               const itemStatus = kitchenItemStatus[item.id] || item.kitchenStatus || 'PENDING';
+              const spiceLabel = orderItemSpiceLabel(item);
+              const spiceTotalUsd = orderItemSpiceTotalUsd(item);
               return (
             <div className="flex gap-3">
               {item.imageUrl ? (
@@ -1551,20 +2091,31 @@ function OrderDetailContent({
                     </div>
                   ) : null}
                 </div>
-                {item.spiceLevel && item.spiceLevel !== 'NORMAL' ? (
-                  <p className="text-xs text-muted-foreground">{item.spiceLevel}</p>
-                ) : null}
-                {item.specialInstructions ? (
-                  <p className="text-xs italic text-muted-foreground">{item.specialInstructions}</p>
-                ) : null}
-                {item.addons?.map((addon) => (
-                  <div key={addon.id} className="mt-1 flex justify-between text-muted-foreground">
-                    <span>
-                      + {addon.quantity} x {addon.addonName}
-                    </span>
-                    <span>{displayUsd(addon.subtotalUsd)}</span>
+                {spiceLabel || item.specialInstructions || item.addons?.length ? (
+                  <div className="mt-2 space-y-1 text-xs">
+                    {spiceLabel ? (
+                      <div className="flex justify-between gap-3 text-muted-foreground">
+                        <span className="min-w-0">
+                          {t('spice')}: {spiceLabel}
+                        </span>
+                        {spiceTotalUsd > 0 ? (
+                          <span className="shrink-0">{displayUsd(spiceTotalUsd)}</span>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {item.addons?.map((addon) => (
+                      <div key={addon.id} className="flex justify-between gap-3 text-muted-foreground">
+                        <span className="min-w-0">
+                          + {addon.quantity} x {addon.addonName}
+                        </span>
+                        <span className="shrink-0">{displayUsd(addon.subtotalUsd)}</span>
+                      </div>
+                    ))}
+                    {item.specialInstructions ? (
+                      <p className="italic text-muted-foreground">{item.specialInstructions}</p>
+                    ) : null}
                   </div>
-                ))}
+                ) : null}
               </div>
             </div>
               );
@@ -1784,6 +2335,13 @@ function KitchenItemCard({ item, now, onGroupStatus, onItemStatus, updatingItemI
         <div className="space-y-2 text-sm">
           {item.rows.map((row) => {
             const addonText = formatKitchenAddons(row.addons);
+            const spiceLabel = orderItemSpiceLabel(row);
+            const modifierText = [
+              spiceLabel ? `${t('spice')}: ${spiceLabel}` : '',
+              addonText ? `${t('addons')}: ${addonText}` : '',
+            ]
+              .filter(Boolean)
+              .join(' · ');
             const rowUpdating = updatingItemIds.has(row.id);
             return (
               <div key={row.id} className="rounded-md border border-border bg-muted/20 p-3">
@@ -1799,9 +2357,7 @@ function KitchenItemCard({ item, now, onGroupStatus, onItemStatus, updatingItemI
                   </div>
                   <KitchenStatusBadge status={row.kitchenStatus} />
                 </div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {t('addons')}: {addonText || '-'}
-                </div>
+                <div className="mt-1 text-xs text-muted-foreground">{modifierText || `${t('addons')}: -`}</div>
                 {row.specialInstructions ? (
                   <div className="mt-1 text-xs text-muted-foreground">
                     {t('note')}: {row.specialInstructions}
@@ -3724,6 +4280,20 @@ function formatKitchenAddons(addons = []) {
     .join(', ');
 }
 
+function orderItemSpiceLabel(item) {
+  const spiceLevel = String(item?.spiceLevel || '').trim();
+  const spiceLabel = String(item?.spiceLevelName || spiceLevel).trim();
+  if (!spiceLabel) return '';
+  if (spiceLevel.toUpperCase() === 'NORMAL' || spiceLabel.toUpperCase() === 'NORMAL') return '';
+  return spiceLabel;
+}
+
+function orderItemSpiceTotalUsd(item) {
+  const unitPriceUsd = Number(item?.spiceLevelPriceUsd || 0);
+  const quantity = Math.max(1, Number(item?.quantity || 1));
+  return unitPriceUsd * quantity;
+}
+
 function canUpdateKitchenItem(order) {
   return (
     order?.paymentStatus === 'PAID' &&
@@ -3745,6 +4315,14 @@ function maskEmail(value) {
     return `${email.charAt(0)}***${atIndex >= 0 ? email.slice(atIndex) : ''}`;
   }
   return `${email.charAt(0)}***${email.slice(atIndex)}`;
+}
+
+function profileDisplayName(value) {
+  if (!value) return 'Profile';
+  const email = String(value);
+  const atIndex = email.indexOf('@');
+  const name = atIndex > 0 ? email.slice(0, atIndex) : email;
+  return name || 'Profile';
 }
 
 function Metric({ icon: Icon, title, value, sub, tone = 'primary' }) {
@@ -4079,7 +4657,7 @@ function AdminAccountsView({ request, reload }) {
       const data = await request('/api/admin/accounts');
       setAccounts(data || []);
     } catch (error) {
-      setMessage('Failed to load accounts');
+      setMessage(t('accountLoadFailed'));
     }
   }
 
@@ -4096,23 +4674,23 @@ function AdminAccountsView({ request, reload }) {
         }),
       });
       setForm({ username: '', password: '' });
-      setMessage('Admin account created successfully');
+      setMessage(t('adminAccountCreated'));
       loadAccounts();
     } catch (error) {
-      setMessage(error.message || 'Failed to create account');
+      setMessage(error.message || t('accountCreateFailed'));
     } finally {
       setLoading(false);
     }
   }
 
   async function deactivateAccount(username) {
-    if (!confirm(`Deactivate ${username}?`)) return;
+    if (!confirm(t('confirmDeactivateAccount').replace('{username}', username))) return;
     try {
       await request(`/api/admin/accounts/${username}/deactivate`, { method: 'PATCH' });
-      setMessage('Account deactivated');
+      setMessage(t('accountDeactivated'));
       loadAccounts();
     } catch (error) {
-      setMessage(error.message || 'Failed to deactivate account');
+      setMessage(error.message || t('accountDeactivateFailed'));
     }
   }
 
@@ -4120,7 +4698,7 @@ function AdminAccountsView({ request, reload }) {
     <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
       <Card className="lg:sticky lg:top-24 lg:self-start">
         <CardHeader>
-          <CardTitle>Create Admin</CardTitle>
+          <CardTitle>{t('createAdmin')}</CardTitle>
         </CardHeader>
         <CardContent>
           {message && (
@@ -4130,54 +4708,66 @@ function AdminAccountsView({ request, reload }) {
             <Input
               value={form.username}
               onChange={(e) => setForm({ ...form, username: e.target.value })}
-              placeholder="Username"
+              placeholder={t('username')}
               disabled={loading}
               required
             />
             <Input
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
-              placeholder="Password"
+              placeholder={t('password')}
               type="password"
               disabled={loading}
               required
             />
             <Button disabled={loading} className="w-full">
               <Check className="h-4 w-4" />
-              Create
+              {t('create')}
             </Button>
           </form>
         </CardContent>
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>Admin Accounts</CardTitle>
+          <CardTitle>{t('adminAccounts')}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-2">
-            {accounts.map((account) => (
-              <div key={account.username} className="flex items-center justify-between rounded-md border p-3">
-                <div>
-                  <div className="font-medium">{account.username}</div>
-                  <div className="text-sm text-muted-foreground">{account.role}</div>
+            {accounts.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{t('noAccounts')}</p>
+            ) : (
+              accounts.map((account) => (
+                <div key={account.username} className="flex items-center justify-between rounded-md border p-3">
+                  <div>
+                    <div className="font-medium">{account.username}</div>
+                    <div className="text-sm text-muted-foreground">
+                      {adminRoleLabel(account.role, t)}
+                    </div>
+                  </div>
+                  {account.role !== 'SUPER_ADMIN' && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => deactivateAccount(account.username)}
+                    >
+                      {t('deactivate')}
+                    </Button>
+                  )}
                 </div>
-                {account.role !== 'SUPER_ADMIN' && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => deactivateAccount(account.username)}
-                  >
-                    Deactivate
-                  </Button>
-                )}
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </CardContent>
       </Card>
     </div>
   );
+}
+
+function adminRoleLabel(role, t) {
+  if (role === 'SUPER_ADMIN') return t('superAdmin');
+  if (role === 'ADMIN') return t('admin');
+  return role || t('admin');
 }
 
 // Utilities
