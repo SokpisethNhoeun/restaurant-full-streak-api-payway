@@ -3864,9 +3864,10 @@ function TablesView({ tables, request, reload }) {
   function printTable(table) {
     const svg = document.querySelector(`[data-qr="${table.id}"] svg`);
     const qr = svg ? new XMLSerializer().serializeToString(svg) : '';
+    const qrUrl = tableQrUrl(table);
     const win = window.open('', '_blank');
     win.document.write(
-      `<html><body style="font-family:sans-serif;text-align:center;padding:32px"><h1>HappyBoat</h1><h2>${table.label}</h2><div>${qr}</div><p>${table.qrUrl}</p></body></html>`
+      `<html><body style="font-family:sans-serif;text-align:center;padding:32px"><h1>HappyBoat</h1><h2>${escapeHtml(table.label)}</h2><div>${qr}</div><p>${escapeHtml(qrUrl)}</p></body></html>`
     );
     win.print();
   }
@@ -3903,43 +3904,72 @@ function TablesView({ tables, request, reload }) {
         </CardContent>
       </Card>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {tables.map((table) => (
-          <Card key={table.id}>
-            <CardContent className="space-y-3 text-center">
-              <div className="flex items-start justify-between text-left">
-                <div>
-                  <h3 className="font-semibold">{table.label}</h3>
-                  <p className="text-sm text-muted-foreground">{table.tableNumber}</p>
+        {tables.map((table) => {
+          const qrUrl = tableQrUrl(table);
+          return (
+            <Card key={table.id}>
+              <CardContent className="space-y-3 text-center">
+                <div className="flex items-start justify-between text-left">
+                  <div>
+                    <h3 className="font-semibold">{table.label}</h3>
+                    <p className="text-sm text-muted-foreground">{table.tableNumber}</p>
+                  </div>
+                  <Badge tone={table.active ? 'primary' : 'danger'}>
+                    {table.active ? t('available') : t('inactive')}
+                  </Badge>
                 </div>
-                <Badge tone={table.active ? 'primary' : 'danger'}>
-                  {table.active ? t('available') : t('inactive')}
-                </Badge>
-              </div>
-              <div
-                className="inline-flex rounded-lg border border-border bg-[#fff] p-3 text-[#000]"
-                data-qr={table.id}
-              >
-                <QRCodeSVG value={table.qrUrl} size={160} includeMargin />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => downloadSvg(table.id, `${table.tableNumber}.svg`)}
+                <div
+                  className="inline-flex rounded-lg border border-border bg-[#fff] p-3 text-[#000]"
+                  data-qr={table.id}
                 >
-                  <Download className="h-4 w-4" />
-                  SVG
-                </Button>
-                <Button variant="outline" onClick={() => printTable(table)}>
-                  <Printer className="h-4 w-4" />
-                  {t('print')}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+                  <QRCodeSVG value={qrUrl} size={160} includeMargin />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => downloadSvg(table.id, `${table.tableNumber}.svg`)}
+                  >
+                    <Download className="h-4 w-4" />
+                    SVG
+                  </Button>
+                  <Button variant="outline" onClick={() => printTable(table)}>
+                    <Printer className="h-4 w-4" />
+                    {t('print')}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
       </div>
     </div>
   );
+}
+
+function tableQrUrl(table) {
+  const tableNumber = String(table?.tableNumber || '').trim();
+  if (!tableNumber) {
+    return table?.qrUrl || '';
+  }
+
+  const path = `/t/${encodeURIComponent(tableNumber)}`;
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}${path}`;
+  }
+
+  return table?.qrUrl || path;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => (
+    {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    }[char]
+  ));
 }
 
 // Payments
