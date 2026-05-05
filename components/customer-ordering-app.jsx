@@ -678,9 +678,9 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const tableLabel = customerTableLabel(table, tableNumber, t);
 
   return (
-    <main className="min-h-screen bg-background pb-24 lg:pb-0">
+    <main className="min-h-screen overflow-x-hidden bg-background pb-24 lg:pb-0">
       {/* ── Header ─────────────────────────────────────────── */}
-      <header className="sticky top-0 z-20 border-b border-border/60 bg-background/95 shadow-sm backdrop-blur-md">
+      <header className="fixed left-0 right-0 top-0 z-20 border-b border-border/60 bg-background/95 shadow-sm backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3">
           <div className="flex items-center gap-3">
             <div className="relative">
@@ -708,6 +708,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
           </div>
         </div>
       </header>
+      <div className="h-[69px]" aria-hidden="true" />
 
       <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[1fr_360px]">
         {/* ── Menu section ───────────────────────────────────── */}

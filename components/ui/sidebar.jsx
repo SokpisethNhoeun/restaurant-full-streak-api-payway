@@ -79,14 +79,31 @@ export function Sidebar({ className, children, ...props }) {
   const { open, isDesktop } = useSidebar();
 
   return (
-    <SidebarPanel
-      className={className}
-      mobile={!isDesktop}
-      data-state={open ? "expanded" : "collapsed"}
-      {...props}
-    >
-      {children}
-    </SidebarPanel>
+    <>
+      <SidebarSpacer />
+      <SidebarPanel
+        className={className}
+        mobile={!isDesktop}
+        data-state={open ? "expanded" : "collapsed"}
+        {...props}
+      >
+        {children}
+      </SidebarPanel>
+    </>
+  );
+}
+
+function SidebarSpacer() {
+  const { open } = useSidebar();
+
+  return (
+    <div
+      aria-hidden="true"
+      className={cn(
+        "shrink-0 transition-[width] duration-200",
+        open ? "w-[min(var(--sidebar-width),calc(100vw-1rem))]" : "w-[var(--sidebar-width-icon)]"
+      )}
+    />
   );
 }
 
@@ -103,8 +120,7 @@ function SidebarPanel({
       className={cn(
         "z-30 box-border flex max-w-full shrink-0 flex-col border-r border-border bg-card text-card-foreground",
         "transition-[width,transform] duration-200",
-        "sticky top-0",
-        mobile ? "h-dvh" : "h-screen",
+        "fixed left-0 top-0 h-dvh",
         open
           ? "w-[min(var(--sidebar-width),calc(100vw-1rem))] overflow-hidden"
           : "w-[var(--sidebar-width-icon)] overflow-visible",

@@ -722,12 +722,15 @@ export default function DashboardApp() {
   async function loadTtsStatus() {
     try {
       const status = await request('/api/admin/tts/status');
+      const serverFallback = Boolean(status?.serverFallback);
       setSpeechSupport((current) => ({
         ...current,
-        server: Boolean(status?.serverFallback),
+        server: serverFallback,
       }));
+      return serverFallback;
     } catch {
       setSpeechSupport((current) => ({ ...current, server: false }));
+      return false;
     }
   }
   async function loadOrders(options = {}) {
@@ -963,7 +966,7 @@ export default function DashboardApp() {
     }
   }
 
-  function playSound(alertType = 'order') {
+  function playSound(alertType = 'order', options = {}) {
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       const ctx = audioRef.current || new AudioContext();
@@ -993,7 +996,7 @@ export default function DashboardApp() {
         if (navigator.vibrate) {
           navigator.vibrate([180, 70, 180, 220, 180]);
         }
-        speakDashboardAlert(alertType);
+        speakDashboardAlert(alertType, options);
       };
       if (ctx.state === 'suspended') {
         ctx
@@ -1012,9 +1015,38 @@ export default function DashboardApp() {
     }
   }
 
-  function testSound() {
+  async function testSound() {
+    requestDashboardNotificationPermission();
     unlockSound();
-    playSound('order');
+    const serverFallback = await loadTtsStatus();
+    unlockSound();
+    playSound('order', { serverFallback });
+  }
+
+  function requestDashboardNotificationPermission() {
+    try {
+      if (!('Notification' in window) || window.Notification.permission !== 'default') return;
+      window.Notification.requestPermission().catch(() => {});
+    } catch {
+      // Browser notifications are optional.
+    }
+  }
+
+  function showDashboardBrowserNotification(title, body, tag) {
+    try {
+      if (!('Notification' in window) || window.Notification.permission !== 'granted') return;
+      const notification = new window.Notification(title, {
+        body,
+        icon: '/logo.png',
+        badge: '/icon-192.png',
+        tag,
+        renotify: true,
+        silent: false,
+      });
+      window.setTimeout(() => notification.close(), 9000);
+    } catch {
+      // Browser notifications are optional.
+    }
   }
 
   function setSoundLanguagePreference(nextLanguage) {
@@ -1040,21 +1072,31 @@ export default function DashboardApp() {
     }
   }
 
-  function speakDashboardAlert(alertType = 'order') {
+  function speakDashboardAlert(alertType = 'order', options = {}) {
     const language = soundLanguage === 'km' ? 'km' : 'en';
     const text = dashboardVoiceText(alertType, language);
-    if (trySpeakDashboardAlertInBrowser(text, language)) return;
-    if (language === 'km' && speechSupport.server) {
+    const canUseServer = options.serverFallback ?? speechSupport.server;
+    const voices =
+      typeof window !== 'undefined' && 'speechSynthesis' in window
+        ? window.speechSynthesis.getVoices()
+        : [];
+    const voice = findDashboardSpeechVoice(language, voices);
+
+    if (language === 'km' && !voice && canUseServer) {
+      speakDashboardAlertWithServer(text, language);
+      return;
+    }
+
+    if (trySpeakDashboardAlertInBrowser(text, language, voice)) return;
+    if (language === 'km' && canUseServer) {
       speakDashboardAlertWithServer(text, language);
     }
   }
 
-  function trySpeakDashboardAlertInBrowser(text, language) {
+  function trySpeakDashboardAlertInBrowser(text, language, preferredVoice) {
     try {
       if (!('speechSynthesis' in window)) return false;
-      const voices = window.speechSynthesis.getVoices();
-      const voice = findDashboardSpeechVoice(language, voices);
-      if (language === 'km' && !voice) return false;
+      const voice = preferredVoice || findDashboardSpeechVoice(language, window.speechSynthesis.getVoices());
 
       const utterance = new window.SpeechSynthesisUtterance(text);
       utterance.lang = language === 'km' ? 'km-KH' : 'en-US';
@@ -1064,6 +1106,7 @@ export default function DashboardApp() {
         utterance.voice = voice;
       }
       window.speechSynthesis.cancel();
+      window.speechSynthesis.resume?.();
       window.speechSynthesis.speak(utterance);
       return true;
     } catch {
@@ -1117,11 +1160,12 @@ export default function DashboardApp() {
       notifiedOrderToastRef.current = new Set([...notifiedOrderToastRef.current].slice(-50));
     }
     const title = isPaidKitchenOrder(order) ? t('paidOrderReady') : t('newOrderUpdate');
+    const description = `${order.orderNumber || t('order')} · ${order.tableNumber || ''}`;
     gooeyToast.info(
       title,
       goeyToastOptions({
         id: 'dashboard-order-alert',
-        description: `${order.orderNumber || t('order')} · ${order.tableNumber || ''}`,
+        description,
         action: order.id
           ? {
               label: t('showDetail'),
@@ -1130,6 +1174,7 @@ export default function DashboardApp() {
           : undefined,
       })
     );
+    showDashboardBrowserNotification(title, description, toastKey);
     return true;
   }
 
@@ -1140,11 +1185,12 @@ export default function DashboardApp() {
     if (notifiedCustomerAlertRef.current.size > 100) {
       notifiedCustomerAlertRef.current = new Set([...notifiedCustomerAlertRef.current].slice(-50));
     }
+    const description = `${orderAlert?.orderNumber || t('order')} · ${orderAlert?.tableNumber || ''} · ${orderAlert?.waitingMinutes || 10}m+`;
     gooeyToast.info(
       t('orderNeedsAttention'),
       goeyToastOptions({
         id: 'dashboard-customer-alert',
-        description: `${orderAlert?.orderNumber || t('order')} · ${orderAlert?.tableNumber || ''} · ${orderAlert?.waitingMinutes || 10}m+`,
+        description,
         action: orderAlert?.id
           ? {
               label: t('showDetail'),
@@ -1153,6 +1199,7 @@ export default function DashboardApp() {
           : undefined,
       })
     );
+    showDashboardBrowserNotification(t('orderNeedsAttention'), description, toastKey);
     return true;
   }
 
@@ -1163,13 +1210,15 @@ export default function DashboardApp() {
     if (notifiedPaymentToastRef.current.size > 100) {
       notifiedPaymentToastRef.current = new Set([...notifiedPaymentToastRef.current].slice(-50));
     }
+    const description = `${payment.paymentNumber || t('payments')} · ${payment.tableNumber || ''}`;
     gooeyToast.success(
       t('paymentReceivedAlert'),
       goeyToastOptions({
         id: 'dashboard-payment-alert',
-        description: `${payment.paymentNumber || t('payments')} · ${payment.tableNumber || ''}`,
+        description,
       })
     );
+    showDashboardBrowserNotification(t('paymentReceivedAlert'), description, toastKey);
     return true;
   }
 
@@ -1415,7 +1464,7 @@ export default function DashboardApp() {
         </Sidebar>
 
         <SidebarInset>
-          <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
+          <header className="fixed right-0 top-0 z-20 border-b border-border bg-background/95 backdrop-blur transition-[left] duration-200 left-[var(--sidebar-width-icon)] group-data-[state=expanded]/sidebar-wrapper:left-[min(var(--sidebar-width),calc(100vw-1rem))]">
             <DashboardFrame className="flex items-center justify-between gap-3 py-3 pl-1 pr-3 sm:px-4">
               <div className="flex min-w-0 items-center gap-2">
                 <DashboardTopbarSidebarTrigger />
@@ -1443,6 +1492,7 @@ export default function DashboardApp() {
               </div>
             </DashboardFrame>
           </header>
+          <div className="h-[65px]" aria-hidden="true" />
 
           <DashboardFrame className="py-6">
             {tab === 'orders' ? (
