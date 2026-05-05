@@ -141,6 +141,19 @@ const DASHBOARD_VOICE_MESSAGES = {
     rush: 'អតិថិជនរង់ចាំដប់នាទីហើយ',
   },
 };
+const DASHBOARD_ALERT_AUDIO_BASE = '/audio/dashboard-alerts';
+const DASHBOARD_ALERT_AUDIO_FILES = {
+  en: {
+    order: `${DASHBOARD_ALERT_AUDIO_BASE}/en-order.mp3`,
+    payment: `${DASHBOARD_ALERT_AUDIO_BASE}/en-payment.mp3`,
+    rush: `${DASHBOARD_ALERT_AUDIO_BASE}/en-rush.mp3`,
+  },
+  km: {
+    order: `${DASHBOARD_ALERT_AUDIO_BASE}/km-order.mp3`,
+    payment: `${DASHBOARD_ALERT_AUDIO_BASE}/km-payment.mp3`,
+    rush: `${DASHBOARD_ALERT_AUDIO_BASE}/km-rush.mp3`,
+  },
+};
 
 function createMerchantSettingsForm(settings = {}) {
   return {
@@ -238,7 +251,7 @@ export default function DashboardApp() {
     browser: false,
     english: false,
     khmer: false,
-    server: false,
+    recorded: true,
   });
   const [dashboardNow, setDashboardNow] = useState(Date.now());
   const audioRef = useRef(null);
@@ -332,7 +345,6 @@ export default function DashboardApp() {
   useEffect(() => {
     if (!signedIn) return;
     setLiveState('connecting');
-    loadTtsStatus();
     loadAll();
 
     const client = new Client({
@@ -719,20 +731,6 @@ export default function DashboardApp() {
     }
     setLastUpdatedAt(new Date());
   }
-  async function loadTtsStatus() {
-    try {
-      const status = await request('/api/admin/tts/status');
-      const serverFallback = Boolean(status?.serverFallback);
-      setSpeechSupport((current) => ({
-        ...current,
-        server: serverFallback,
-      }));
-      return serverFallback;
-    } catch {
-      setSpeechSupport((current) => ({ ...current, server: false }));
-      return false;
-    }
-  }
   async function loadOrders(options = {}) {
     const data = await request('/api/admin/orders');
     mergeOrders(data, options);
@@ -966,7 +964,7 @@ export default function DashboardApp() {
     }
   }
 
-  function playSound(alertType = 'order', options = {}) {
+  function playSound(alertType = 'order') {
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       const ctx = audioRef.current || new AudioContext();
@@ -996,7 +994,7 @@ export default function DashboardApp() {
         if (navigator.vibrate) {
           navigator.vibrate([180, 70, 180, 220, 180]);
         }
-        speakDashboardAlert(alertType, options);
+        speakDashboardAlert(alertType);
       };
       if (ctx.state === 'suspended') {
         ctx
@@ -1018,9 +1016,8 @@ export default function DashboardApp() {
   async function testSound() {
     requestDashboardNotificationPermission();
     unlockSound();
-    const serverFallback = await loadTtsStatus();
     unlockSound();
-    playSound('order', { serverFallback });
+    playSound('order');
   }
 
   function requestDashboardNotificationPermission() {
@@ -1072,24 +1069,35 @@ export default function DashboardApp() {
     }
   }
 
-  function speakDashboardAlert(alertType = 'order', options = {}) {
+  function speakDashboardAlert(alertType = 'order') {
     const language = soundLanguage === 'km' ? 'km' : 'en';
     const text = dashboardVoiceText(alertType, language);
-    const canUseServer = options.serverFallback ?? speechSupport.server;
     const voices =
       typeof window !== 'undefined' && 'speechSynthesis' in window
         ? window.speechSynthesis.getVoices()
         : [];
     const voice = findDashboardSpeechVoice(language, voices);
+    const fallback = () => trySpeakDashboardAlertInBrowser(text, language, voice);
 
-    if (language === 'km' && !voice && canUseServer) {
-      speakDashboardAlertWithServer(text, language);
-      return;
-    }
+    if (tryPlayDashboardAlertAudio(alertType, language, fallback)) return;
+    fallback();
+  }
 
-    if (trySpeakDashboardAlertInBrowser(text, language, voice)) return;
-    if (language === 'km' && canUseServer) {
-      speakDashboardAlertWithServer(text, language);
+  function tryPlayDashboardAlertAudio(alertType, language, fallback) {
+    const url = DASHBOARD_ALERT_AUDIO_FILES[language]?.[alertType];
+    if (!url) return false;
+
+    try {
+      const audio = new Audio(url);
+      audio.preload = 'auto';
+      audio.volume = 1;
+      const playPromise = audio.play();
+      if (playPromise?.catch) {
+        playPromise.catch(() => fallback?.());
+      }
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -1111,36 +1119,6 @@ export default function DashboardApp() {
       return true;
     } catch {
       return false;
-    }
-  }
-
-  async function speakDashboardAlertWithServer(text, language) {
-    let audioUrl = '';
-    try {
-      const response = await fetch(`${API_BASE}/api/admin/tts/speech`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: dashboardAuthHeaders({
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': 'true',
-        }),
-        body: JSON.stringify({ text, language }),
-        cache: 'no-store',
-      });
-      if (!response.ok) return;
-      const blob = await response.blob();
-      if (!blob.size) return;
-      audioUrl = window.URL.createObjectURL(blob);
-      const audio = new Audio(audioUrl);
-      const revokeAudioUrl = () => window.URL.revokeObjectURL(audioUrl);
-      audio.onended = revokeAudioUrl;
-      audio.onerror = revokeAudioUrl;
-      await audio.play();
-    } catch {
-      if (audioUrl) {
-        window.URL.revokeObjectURL(audioUrl);
-      }
-      // Server-side speech output is best-effort.
     }
   }
 
@@ -1700,12 +1678,14 @@ function SidebarSoundSettings({
   const { t } = useLanguage();
   const voiceSource =
     soundLanguage === 'km'
-      ? speechSupport.khmer
-        ? t('browserVoice')
-        : speechSupport.server
-          ? t('serverVoice')
+      ? speechSupport.recorded
+        ? t('recordedVoice')
+        : speechSupport.khmer
+          ? t('browserVoice')
           : t('beepOnly')
-      : t('browserVoice');
+      : speechSupport.recorded
+        ? t('recordedVoice')
+        : t('browserVoice');
 
   return (
     <div className={cn("space-y-2 rounded-md border border-border/70 bg-background/60 p-2", compact && "bg-muted/30")}>
