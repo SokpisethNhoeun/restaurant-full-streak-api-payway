@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input, Select, Textarea } from '@/components/ui/input';
 import { API_BASE, api } from '@/lib/api';
 import { goeyToastOptions } from '@/lib/goey-toast-options';
+import { useBodyScrollLock } from '@/lib/use-body-scroll-lock';
 import { cn, displayUsd, khr, tags, usd } from '@/lib/utils';
 import { gooeyToast } from 'goey-toast';
 import {
@@ -79,6 +80,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const customerAudioRef = useRef(null);
   const lastOrderStatusRef = useRef({});
   const welcomeToastShown = useRef(false);
+  useBodyScrollLock(cartOpen || Boolean(activeItem) || Boolean(openPaymentOrderId));
 
   const storageKeys = useMemo(
     () => ({
@@ -699,7 +701,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
           <div className="flex items-center gap-2">
             <LanguageToggle />
             <ThemeToggle />
-            <div className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-3 text-sm font-semibold">
+            <div className="hidden h-8 items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-3 text-sm font-semibold sm:flex">
               <Utensils className="h-3.5 w-3.5 text-primary" />
               {table?.tableNumber || tableLabel}
             </div>

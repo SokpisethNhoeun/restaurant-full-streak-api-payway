@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useBodyScrollLock } from "@/lib/use-body-scroll-lock";
 import { cn } from "@/lib/utils";
 
 const DialogContext = createContext({
@@ -11,6 +12,8 @@ const DialogContext = createContext({
 });
 
 export function Dialog({ open = false, onOpenChange = () => {}, children }) {
+  useBodyScrollLock(open);
+
   useEffect(() => {
     if (!open) return undefined;
 

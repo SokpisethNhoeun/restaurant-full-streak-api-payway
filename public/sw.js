@@ -1,4 +1,4 @@
-const SW_VERSION = "happyboat-pwa-v1";
+const SW_VERSION = "happyboat-pwa-v2";
 const APP_SHELL_CACHE = `${SW_VERSION}-shell`;
 const STATIC_CACHE = `${SW_VERSION}-static`;
 const PAGE_CACHE = `${SW_VERSION}-pages`;
@@ -7,6 +7,8 @@ const IMAGE_CACHE = `${SW_VERSION}-images`;
 
 const APP_SHELL = [
   "/",
+  "/dashboard",
+  "/t/T01",
   "/offline.html",
   "/manifest.webmanifest",
   "/logo.png",

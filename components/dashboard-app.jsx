@@ -18,8 +18,14 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/h
 import { Input, Select, Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
   SidebarHeader,
@@ -33,6 +39,7 @@ import {
 } from '@/components/ui/sidebar';
 import { API_BASE, WS_URL, api } from '@/lib/api';
 import { goeyToastOptions } from '@/lib/goey-toast-options';
+import { useBodyScrollLock } from '@/lib/use-body-scroll-lock';
 import { cn, displayUsd, formatDuration, khr, tags, usd } from '@/lib/utils';
 import { Client } from '@stomp/stompjs';
 import { InputOtp, Switch as HeroSwitch } from '@heroui/react';
@@ -117,11 +124,23 @@ const KITCHEN_TIME_FILTERS = [
 const DASHBOARD_SESSION_HINT = 'happyboat-dashboard-session';
 const DASHBOARD_TOKEN_KEY = 'happyboat-dashboard-token';
 const DASHBOARD_SOUND_READY_KEY = 'happyboat-dashboard-sound-ready';
-const DASHBOARD_LANGUAGE_KEY = 'happyboat-language';
+const DASHBOARD_SOUND_LANGUAGE_KEY = 'happyboat-dashboard-sound-language';
 const ORDER_ATTENTION_MS = 10 * 60 * 1000;
 const DONUT_COLORS = ['#0f8a7f', '#f59e0b', '#2563eb', '#dc2626', '#7c3aed', '#059669'];
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 const ALLOWED_UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+const DASHBOARD_VOICE_MESSAGES = {
+  en: {
+    order: 'Received new order',
+    payment: 'Received payment',
+    rush: 'Customer has waited ten minutes',
+  },
+  km: {
+    order: 'បានទទួលការកម្មង់ថ្មី',
+    payment: 'បានទទួលការទូទាត់',
+    rush: 'អតិថិជនរង់ចាំដប់នាទីហើយ',
+  },
+};
 
 function createMerchantSettingsForm(settings = {}) {
   return {
@@ -153,9 +172,29 @@ function clearDashboardSession() {
   window.localStorage.removeItem(DASHBOARD_TOKEN_KEY);
 }
 
+function normalizeSpeechLang(lang = '') {
+  return String(lang).replace('_', '-').toLowerCase();
+}
+
+function findDashboardSpeechVoice(language, voices = []) {
+  const preferredLangs = language === 'km' ? ['km-kh', 'km'] : ['en-us', 'en'];
+  return (
+    voices.find((voice) => preferredLangs.includes(normalizeSpeechLang(voice.lang))) ||
+    voices.find((voice) =>
+      preferredLangs.some((lang) => normalizeSpeechLang(voice.lang).startsWith(`${lang}-`))
+    )
+  );
+}
+
+function dashboardVoiceText(alertType, language) {
+  const messages = DASHBOARD_VOICE_MESSAGES[language] || DASHBOARD_VOICE_MESSAGES.en;
+  return messages[alertType] || messages.order;
+}
+
 export default function DashboardApp() {
   const { t } = useLanguage();
   const [credentials, setCredentials] = useState({ username: '', password: '' });
+  const [signingIn, setSigningIn] = useState(false);
   const [otpSession, setOtpSession] = useState(null);
   const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
   const [otpError, setOtpError] = useState('');
@@ -194,6 +233,13 @@ export default function DashboardApp() {
   const [liveState, setLiveState] = useState('offline');
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
   const [soundReady, setSoundReady] = useState(false);
+  const [soundLanguage, setSoundLanguage] = useState('en');
+  const [speechSupport, setSpeechSupport] = useState({
+    browser: false,
+    english: false,
+    khmer: false,
+    server: false,
+  });
   const [dashboardNow, setDashboardNow] = useState(Date.now());
   const audioRef = useRef(null);
   const ordersRef = useRef([]);
@@ -252,8 +298,41 @@ export default function DashboardApp() {
   }, []);
 
   useEffect(() => {
+    const storedSoundLanguage = window.localStorage.getItem(DASHBOARD_SOUND_LANGUAGE_KEY);
+    if (storedSoundLanguage === 'km' || storedSoundLanguage === 'en') {
+      setSoundLanguage(storedSoundLanguage);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!('speechSynthesis' in window)) {
+      setSpeechSupport((current) => ({ ...current, browser: false, english: false, khmer: false }));
+      return undefined;
+    }
+
+    const syncSpeechSupport = () => {
+      const voices = window.speechSynthesis.getVoices();
+      setSpeechSupport((current) => ({
+        ...current,
+        browser: true,
+        english: Boolean(findDashboardSpeechVoice('en', voices)),
+        khmer: Boolean(findDashboardSpeechVoice('km', voices)),
+      }));
+    };
+
+    syncSpeechSupport();
+    const timer = window.setTimeout(syncSpeechSupport, 500);
+    window.speechSynthesis.addEventListener?.('voiceschanged', syncSpeechSupport);
+    return () => {
+      window.clearTimeout(timer);
+      window.speechSynthesis.removeEventListener?.('voiceschanged', syncSpeechSupport);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!signedIn) return;
     setLiveState('connecting');
+    loadTtsStatus();
     loadAll();
 
     const client = new Client({
@@ -305,6 +384,8 @@ export default function DashboardApp() {
     return () => window.clearInterval(timer);
   }, [signedIn]);
 
+  useBodyScrollLock(!signedIn && Boolean(otpSession));
+
   useEffect(() => {
     if (!otpSession) return undefined;
     setOtpNow(Date.now());
@@ -349,8 +430,10 @@ export default function DashboardApp() {
 
   async function signIn(event) {
     event.preventDefault();
+    if (signingIn) return;
     setMessage('');
     setOtpError('');
+    setSigningIn(true);
     unlockSound();
     try {
       const challenge = await api('/api/admin/auth/login', {
@@ -366,6 +449,8 @@ export default function DashboardApp() {
     } catch {
       clearDashboardSession();
       setMessage(t('signInFailed'));
+    } finally {
+      setSigningIn(false);
     }
   }
 
@@ -633,6 +718,17 @@ export default function DashboardApp() {
       setMessage(failed.reason?.message || 'Dashboard refresh failed');
     }
     setLastUpdatedAt(new Date());
+  }
+  async function loadTtsStatus() {
+    try {
+      const status = await request('/api/admin/tts/status');
+      setSpeechSupport((current) => ({
+        ...current,
+        server: Boolean(status?.serverFallback),
+      }));
+    } catch {
+      setSpeechSupport((current) => ({ ...current, server: false }));
+    }
   }
   async function loadOrders(options = {}) {
     const data = await request('/api/admin/orders');
@@ -921,6 +1017,16 @@ export default function DashboardApp() {
     playSound('order');
   }
 
+  function setSoundLanguagePreference(nextLanguage) {
+    const normalizedLanguage = nextLanguage === 'km' ? 'km' : 'en';
+    setSoundLanguage(normalizedLanguage);
+    try {
+      window.localStorage.setItem(DASHBOARD_SOUND_LANGUAGE_KEY, normalizedLanguage);
+    } catch {
+      // Storage is best-effort.
+    }
+  }
+
   function markSoundReady(ready) {
     setSoundReady(ready);
     try {
@@ -935,25 +1041,63 @@ export default function DashboardApp() {
   }
 
   function speakDashboardAlert(alertType = 'order') {
+    const language = soundLanguage === 'km' ? 'km' : 'en';
+    const text = dashboardVoiceText(alertType, language);
+    if (trySpeakDashboardAlertInBrowser(text, language)) return;
+    if (language === 'km' && speechSupport.server) {
+      speakDashboardAlertWithServer(text, language);
+    }
+  }
+
+  function trySpeakDashboardAlertInBrowser(text, language) {
     try {
-      if (!('speechSynthesis' in window)) return;
-      let lang = window.localStorage.getItem(DASHBOARD_LANGUAGE_KEY) || 'en';
-      let text = '';
-      if (alertType === 'rush') {
-        text = lang === 'km' ? t('customerWaitingVoice') : t('customerWaitingVoice');
-      } else if (alertType === 'payment') {
-        text = lang === 'km' ? 'បានទទួលការបង់ប្រាក់' : 'Received payment';
-      } else {
-        text = lang === 'km' ? 'បានទទួលការកម្មង់' : 'Received new order';
-      }
+      if (!('speechSynthesis' in window)) return false;
+      const voices = window.speechSynthesis.getVoices();
+      const voice = findDashboardSpeechVoice(language, voices);
+      if (language === 'km' && !voice) return false;
+
       const utterance = new window.SpeechSynthesisUtterance(text);
-      utterance.lang = lang === 'km' ? 'km-KH' : 'en-US';
-      utterance.rate = lang === 'km' ? 0.9 : 0.95;
+      utterance.lang = language === 'km' ? 'km-KH' : 'en-US';
+      utterance.rate = language === 'km' ? 0.9 : 0.95;
       utterance.volume = 1;
+      if (voice) {
+        utterance.voice = voice;
+      }
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(utterance);
+      return true;
     } catch {
-      // Speech output is best-effort.
+      return false;
+    }
+  }
+
+  async function speakDashboardAlertWithServer(text, language) {
+    let audioUrl = '';
+    try {
+      const response = await fetch(`${API_BASE}/api/admin/tts/speech`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: dashboardAuthHeaders({
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        }),
+        body: JSON.stringify({ text, language }),
+        cache: 'no-store',
+      });
+      if (!response.ok) return;
+      const blob = await response.blob();
+      if (!blob.size) return;
+      audioUrl = window.URL.createObjectURL(blob);
+      const audio = new Audio(audioUrl);
+      const revokeAudioUrl = () => window.URL.revokeObjectURL(audioUrl);
+      audio.onended = revokeAudioUrl;
+      audio.onerror = revokeAudioUrl;
+      await audio.play();
+    } catch {
+      if (audioUrl) {
+        window.URL.revokeObjectURL(audioUrl);
+      }
+      // Server-side speech output is best-effort.
     }
   }
 
@@ -1109,6 +1253,7 @@ export default function DashboardApp() {
                 onChange={(e) => setCredentials({ ...credentials, username: e.target.value })}
                 placeholder={t('username')}
                 autoComplete="username"
+                disabled={signingIn}
                 required
               />
               <Input
@@ -1117,11 +1262,16 @@ export default function DashboardApp() {
                 type="password"
                 placeholder={t('password')}
                 autoComplete="current-password"
+                disabled={signingIn}
                 required
               />
-              <Button className="w-full">
-                <LogIn className="h-4 w-4" />
-                {t('signIn')}
+              <Button className="w-full" disabled={signingIn} aria-busy={signingIn}>
+                {signingIn ? (
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                ) : (
+                  <LogIn className="h-4 w-4" />
+                )}
+                {signingIn ? t('checking') : t('signIn')}
               </Button>
             </form>
           </CardContent>
@@ -1212,7 +1362,7 @@ export default function DashboardApp() {
   }
 
   return (
-    <main className="min-h-screen bg-background">
+    <main className="min-h-screen overflow-x-hidden bg-background">
       <SidebarProvider defaultOpen>
         <Sidebar>
           <SidebarHeader>
@@ -1249,13 +1399,26 @@ export default function DashboardApp() {
               </SidebarMenu>
             </SidebarGroup>
           </SidebarContent>
+          <SidebarFooter>
+            <SidebarAccountSection
+              username={username}
+              role={userRole}
+              soundLanguage={soundLanguage}
+              soundReady={soundReady}
+              speechSupport={speechSupport}
+              onSoundLanguageChange={setSoundLanguagePreference}
+              onTestSound={testSound}
+              onRefresh={loadAll}
+              onLogout={logout}
+            />
+          </SidebarFooter>
         </Sidebar>
 
         <SidebarInset>
           <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
-            <DashboardFrame className="flex items-center justify-between gap-3 py-3">
+            <DashboardFrame className="flex items-center justify-between gap-3 py-3 pl-1 pr-3 sm:px-4">
               <div className="flex min-w-0 items-center gap-2">
-                <SidebarTrigger className="shrink-0" />
+                <DashboardTopbarSidebarTrigger />
                 <div className="min-w-0">
                   <h1 className="truncate text-lg font-semibold">HappyBoat</h1>
                   <p className="truncate text-xs text-muted-foreground">{t('liveRestaurantOps')}</p>
@@ -1275,21 +1438,8 @@ export default function DashboardApp() {
                     </span>
                   ) : null}
                 </div>
-                <ProfileHoverCard username={username} role={userRole} onLogout={logout} />
-                <LanguageToggle />
-                <Button
-                  variant="outline"
-                  className="px-3"
-                  onClick={testSound}
-                  aria-label={t('testOrderSound')}
-                >
-                  {soundReady ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-                  <span className="hidden sm:inline">{t('alert')}</span>
-                </Button>
+                <LanguageToggle className="rounded-md px-2 sm:px-3 [&>span]:hidden sm:[&>span]:inline" />
                 <ThemeToggle />
-                <Button variant="outline" size="icon" onClick={loadAll} aria-label={t('refresh')}>
-                  <RefreshCw className="h-4 w-4" />
-                </Button>
               </div>
             </DashboardFrame>
           </header>
@@ -1373,8 +1523,16 @@ export default function DashboardApp() {
   );
 }
 
+function DashboardTopbarSidebarTrigger() {
+  const { open, isDesktop } = useSidebar();
+
+  if (!isDesktop && open) return null;
+
+  return <SidebarTrigger className="-ml-1 h-11 w-11 shrink-0 sm:-ml-2 xl:ml-0 xl:h-10 xl:w-10" />;
+}
+
 function DashboardSidebarBrand() {
-  const { open } = useSidebar();
+  const { open, isDesktop } = useSidebar();
   const { t } = useLanguage();
 
   return (
@@ -1384,6 +1542,7 @@ function DashboardSidebarBrand() {
         <div className="truncate text-sm font-semibold">HappyBoat</div>
         <div className="truncate text-xs text-muted-foreground">{t('liveRestaurantOps')}</div>
       </div>
+      {!isDesktop && open ? <SidebarTrigger className="ml-auto h-10 w-10 shrink-0" /> : null}
     </div>
   );
 }
@@ -1403,37 +1562,241 @@ function DashboardFrame({ className, ...props }) {
   );
 }
 
-function ProfileHoverCard({ username, role, onLogout }) {
+function SidebarAccountSection({
+  username,
+  role,
+  soundLanguage,
+  soundReady,
+  speechSupport,
+  onSoundLanguageChange,
+  onTestSound,
+  onRefresh,
+  onLogout,
+}) {
+  const { open, isDesktop } = useSidebar();
+  const { t } = useLanguage();
   const displayName = profileDisplayName(username);
+  const roleLabel = adminRoleLabel(role, t);
+
+  if (!open) {
+    return (
+      <div className="space-y-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="mx-auto h-11 w-11"
+          onClick={onRefresh}
+          aria-label={t('refresh')}
+          title={t('refresh')}
+        >
+          <RefreshCw className="h-5 w-5" />
+        </Button>
+        <AccountPopover
+          username={username}
+          role={role}
+          isDesktop={isDesktop}
+          soundLanguage={soundLanguage}
+          soundReady={soundReady}
+          speechSupport={speechSupport}
+          onSoundLanguageChange={onSoundLanguageChange}
+          onTestSound={onTestSound}
+          onLogout={onLogout}
+          compact
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <Button type="button" variant="outline" className="w-full justify-start" onClick={onRefresh}>
+        <RefreshCw className="h-4 w-4" />
+        {t('refresh')}
+      </Button>
+      <SidebarSoundSettings
+        soundLanguage={soundLanguage}
+        soundReady={soundReady}
+        speechSupport={speechSupport}
+        onSoundLanguageChange={onSoundLanguageChange}
+        onTestSound={onTestSound}
+      />
+      <div className="flex min-w-0 items-center gap-3 rounded-md bg-muted/50 p-2">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <CircleUserRound className="h-5 w-5" />
+        </div>
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold">{displayName}</div>
+          <div className="truncate text-xs text-muted-foreground">{username || '-'}</div>
+          {role ? <div className="text-xs text-muted-foreground">{roleLabel}</div> : null}
+        </div>
+      </div>
+      <Button type="button" variant="outline" className="w-full justify-start" onClick={onLogout}>
+        <LogOut className="h-4 w-4" />
+        {t('logout')}
+      </Button>
+    </div>
+  );
+}
+
+function SidebarSoundSettings({
+  compact = false,
+  soundLanguage,
+  soundReady,
+  speechSupport,
+  onSoundLanguageChange,
+  onTestSound,
+}) {
+  const { t } = useLanguage();
+  const voiceSource =
+    soundLanguage === 'km'
+      ? speechSupport.khmer
+        ? t('browserVoice')
+        : speechSupport.server
+          ? t('serverVoice')
+          : t('beepOnly')
+      : t('browserVoice');
+
+  return (
+    <div className={cn("space-y-2 rounded-md border border-border/70 bg-background/60 p-2", compact && "bg-muted/30")}>
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <Label className="text-xs text-muted-foreground">{t('soundLanguage')}</Label>
+          <Badge tone={soundReady ? 'primary' : 'secondary'} className="gap-1">
+            {soundReady ? <Volume2 className="h-3 w-3" /> : <VolumeX className="h-3 w-3" />}
+            {voiceSource}
+          </Badge>
+        </div>
+        <Select
+          value={soundLanguage}
+          onChange={(event) => onSoundLanguageChange(event.target.value)}
+          aria-label={t('soundLanguage')}
+        >
+          <option value="km">{t('khmerSound')}</option>
+          <option value="en">{t('englishSound')}</option>
+        </Select>
+      </div>
+      <Button type="button" variant="outline" className="w-full justify-center" onClick={onTestSound}>
+        {soundReady ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+        {t('testOrderSound')}
+      </Button>
+    </div>
+  );
+}
+
+function AccountPopover({
+  username,
+  role,
+  isDesktop,
+  soundLanguage,
+  soundReady,
+  speechSupport,
+  onSoundLanguageChange,
+  onTestSound,
+  onLogout,
+  compact = false,
+}) {
+  const { t } = useLanguage();
+  const displayName = profileDisplayName(username);
+  const roleLabel = adminRoleLabel(role, t);
+  const trigger = (
+    <Button
+      type="button"
+      variant="outline"
+      className={cn(compact ? "mx-auto h-11 w-11 px-0" : "max-w-40 px-3")}
+      aria-label={displayName}
+    >
+      <CircleUserRound className="h-5 w-5 shrink-0" />
+      {!compact ? <span className="hidden max-w-24 truncate sm:inline">{displayName}</span> : null}
+    </Button>
+  );
+  const panel = (
+    <AccountPopoverPanel
+      username={username}
+      displayName={displayName}
+      roleLabel={roleLabel}
+      soundLanguage={soundLanguage}
+      soundReady={soundReady}
+      speechSupport={speechSupport}
+      onSoundLanguageChange={onSoundLanguageChange}
+      onTestSound={onTestSound}
+      onLogout={onLogout}
+    />
+  );
+
+  if (!isDesktop) {
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          side="right"
+          className="w-[min(18rem,calc(100vw-var(--sidebar-width-icon)-1rem))] p-3"
+        >
+          {panel}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
 
   return (
     <HoverCard openDelay={80} closeDelay={120}>
       <HoverCardTrigger>
-        <Button type="button" variant="outline" className="max-w-40 px-3">
-          <CircleUserRound className="h-4 w-4 shrink-0" />
-          <span className="hidden max-w-24 truncate sm:inline">{displayName}</span>
-        </Button>
+        {trigger}
       </HoverCardTrigger>
-      <HoverCardContent>
-        <div className="space-y-3">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-              <CircleUserRound className="h-5 w-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold">{displayName}</div>
-              <div className="mt-1 text-xs font-medium text-muted-foreground">Gmail</div>
-              <div className="truncate text-xs text-muted-foreground">{username || '-'}</div>
-              {role ? <div className="mt-1 text-xs text-muted-foreground">{role}</div> : null}
-            </div>
-          </div>
-          <Button type="button" variant="outline" className="w-full justify-start" onClick={onLogout}>
-            <LogOut className="h-4 w-4" />
-            Logout
-          </Button>
-        </div>
+      <HoverCardContent
+        align="start"
+        className={
+          compact
+            ? "bottom-0 left-[calc(100%+0.5rem)] right-auto top-auto w-[min(18rem,calc(100vw-var(--sidebar-width-icon)-1rem))] before:-left-2 before:top-0 before:h-full before:w-2"
+            : undefined
+        }
+      >
+        {panel}
       </HoverCardContent>
     </HoverCard>
+  );
+}
+
+function AccountPopoverPanel({
+  username,
+  displayName,
+  roleLabel,
+  soundLanguage,
+  soundReady,
+  speechSupport,
+  onSoundLanguageChange,
+  onTestSound,
+  onLogout,
+}) {
+  const { t } = useLanguage();
+
+  return (
+    <div className="space-y-3">
+      <SidebarSoundSettings
+        compact
+        soundLanguage={soundLanguage}
+        soundReady={soundReady}
+        speechSupport={speechSupport}
+        onSoundLanguageChange={onSoundLanguageChange}
+        onTestSound={onTestSound}
+      />
+      <div className="flex items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <CircleUserRound className="h-5 w-5" />
+        </div>
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold">{displayName}</div>
+          <div className="mt-1 text-xs font-medium text-muted-foreground">Gmail</div>
+          <div className="truncate text-xs text-muted-foreground">{username || '-'}</div>
+          {roleLabel ? <div className="mt-1 text-xs text-muted-foreground">{roleLabel}</div> : null}
+        </div>
+      </div>
+      <Button type="button" variant="outline" className="w-full justify-start" onClick={onLogout}>
+        <LogOut className="h-4 w-4" />
+        {t('logout')}
+      </Button>
+    </div>
   );
 }
 
@@ -1959,6 +2322,8 @@ function MobileOrderSheet({
   now,
 }) {
   const { t } = useLanguage();
+  useBodyScrollLock(true, "(max-width: 1023px)");
+
   return (
     <div
       className="fixed inset-0 z-40 flex items-end bg-black/40 backdrop-blur-sm lg:hidden"
@@ -2536,6 +2901,8 @@ function MenuView({ menu, request, reload }) {
   const [editingItem, setEditingItem] = useState(null);
   const [editingCategory, setEditingCategory] = useState(null);
   const [search, setSearch] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
   const [message, setMessage] = useState('');
   const [menuFormOpen, setMenuFormOpen] = useState(false);
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
@@ -2548,10 +2915,24 @@ function MenuView({ menu, request, reload }) {
     priceUsd: '',
     hasQuantity: false,
   });
+  useBodyScrollLock(categoryManagerOpen || menuFormOpen);
+
   const dietaryTags = tags(form.dietaryTags);
-  const items = menu.items.filter((item) =>
-    `${item.name} ${item.description}`.toLowerCase().includes(search.toLowerCase())
-  );
+  const items = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
+    return menu.items.filter((item) => {
+      const matchesSearch =
+        !normalizedSearch ||
+        `${item.name || ''} ${item.description || ''}`.toLowerCase().includes(normalizedSearch);
+      const matchesCategory = !categoryFilter || String(item.categoryId || '') === categoryFilter;
+      const matchesStatus =
+        !statusFilter ||
+        (statusFilter === 'available' && item.available) ||
+        (statusFilter === 'hidden' && !item.available);
+      return matchesSearch && matchesCategory && matchesStatus;
+    });
+  }, [categoryFilter, menu.items, search, statusFilter]);
+  const hasMenuFilters = Boolean(search || categoryFilter || statusFilter);
   const categoryItemCounts = useMemo(() => {
     const counts = {};
     menu.items.forEach((item) => {
@@ -3284,10 +3665,10 @@ function MenuView({ menu, request, reload }) {
         </div>
       ) : null}
       <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-3">
+        <CardHeader className="space-y-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <CardTitle>{t('menu')}</CardTitle>
-            <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end">
               <Button type="button" variant="outline" onClick={openCategoryManager}>
                 <Pencil className="h-4 w-4" />
                 {t('manageCategories')}
@@ -3296,22 +3677,65 @@ function MenuView({ menu, request, reload }) {
                 <Plus className="h-4 w-4" />
                 {t('addNewMenu')}
               </Button>
-              <div className="relative w-72 max-w-full">
-                <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="pl-9"
-                  placeholder={t('search')}
-                />
-              </div>
             </div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(16rem,1fr)_minmax(12rem,15rem)_minmax(10rem,12rem)_auto]">
+            <div className="relative sm:col-span-2 lg:col-span-1">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-9"
+                placeholder={t('search')}
+              />
+            </div>
+            <Select
+              value={categoryFilter}
+              onChange={(event) => setCategoryFilter(event.target.value)}
+              aria-label={t('category')}
+            >
+              <option value="">{t('allCategories')}</option>
+              {menu.categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </Select>
+            <Select
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value)}
+              aria-label={t('orderStatus')}
+            >
+              <option value="">{t('allStatuses')}</option>
+              <option value="available">{t('available')}</option>
+              <option value="hidden">{t('hidden')}</option>
+            </Select>
+            {hasMenuFilters ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full lg:w-auto"
+                onClick={() => {
+                  setSearch('');
+                  setCategoryFilter('');
+                  setStatusFilter('');
+                }}
+              >
+                <X className="h-4 w-4" />
+                {t('clearFilters')}
+              </Button>
+            ) : null}
           </div>
         </CardHeader>
         {message && !menuFormOpen ? (
           <div className="mx-4 mb-3 rounded-md bg-muted px-3 py-2 text-sm">{message}</div>
         ) : null}
         <CardContent className="grid auto-rows-fr gap-3 md:grid-cols-2">
+          {items.length === 0 ? (
+            <div className="col-span-full rounded-md border border-dashed border-border px-3 py-8 text-center text-sm text-muted-foreground">
+              {t('noDishes')}
+            </div>
+          ) : null}
           {items.map((item) => (
             <div key={item.id} className="flex h-full flex-col rounded-md border border-border p-3">
               <div className="flex flex-1 flex-col items-center gap-3 text-center">

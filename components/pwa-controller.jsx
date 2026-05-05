@@ -9,14 +9,17 @@ export function PwaController() {
   const { t } = useLanguage();
   const [installPrompt, setInstallPrompt] = useState(null);
   const [waitingWorker, setWaitingWorker] = useState(null);
+  const [showIosInstallHelp, setShowIosInstallHelp] = useState(false);
   const [installed, setInstalled] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
 
     function handleBeforeInstallPrompt(event) {
+      if (isStandalonePwa()) return;
       event.preventDefault();
       setInstallPrompt(event);
+      setShowIosInstallHelp(false);
     }
 
     function handleAppInstalled() {
@@ -27,6 +30,7 @@ export function PwaController() {
 
     window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
     window.addEventListener("appinstalled", handleAppInstalled);
+    setShowIosInstallHelp(isIosDevice() && !isStandalonePwa());
 
     return () => {
       window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
@@ -87,7 +91,12 @@ export function PwaController() {
     setWaitingWorker(null);
   }
 
-  if (!installPrompt && !waitingWorker && !installed) return null;
+  function dismissInstallPrompt() {
+    setInstallPrompt(null);
+    setShowIosInstallHelp(false);
+  }
+
+  if (!installPrompt && !waitingWorker && !installed && !showIosInstallHelp) return null;
 
   return (
     <div className="fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-md rounded-xl border border-border bg-card p-3 text-card-foreground shadow-xl sm:left-auto sm:right-4 sm:w-96">
@@ -104,6 +113,21 @@ export function PwaController() {
         </div>
       ) : installed ? (
         <div className="text-sm font-semibold">{t("installedHappyBoat")}</div>
+      ) : showIosInstallHelp ? (
+        <div className="flex items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold">{t("installHappyBoat")}</div>
+            <div className="text-xs text-muted-foreground">{t("installIosPrompt")}</div>
+          </div>
+          <button
+            type="button"
+            className="rounded-md p-1 text-muted-foreground hover:text-foreground"
+            onClick={dismissInstallPrompt}
+            aria-label={t("dismissInstallPrompt")}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       ) : (
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
@@ -117,7 +141,7 @@ export function PwaController() {
           <button
             type="button"
             className="rounded-md p-1 text-muted-foreground hover:text-foreground"
-            onClick={() => setInstallPrompt(null)}
+            onClick={dismissInstallPrompt}
             aria-label={t("dismissInstallPrompt")}
           >
             <X className="h-4 w-4" />
@@ -132,4 +156,14 @@ function isSecurePwaContext() {
   return window.location.protocol === "https:" ||
     window.location.hostname === "localhost" ||
     window.location.hostname === "127.0.0.1";
+}
+
+function isStandalonePwa() {
+  return window.matchMedia?.("(display-mode: standalone)")?.matches ||
+    window.navigator.standalone === true;
+}
+
+function isIosDevice() {
+  return /iphone|ipad|ipod/i.test(window.navigator.userAgent) ||
+    (window.navigator.platform === "MacIntel" && window.navigator.maxTouchPoints > 1);
 }

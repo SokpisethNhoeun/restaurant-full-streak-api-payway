@@ -1,11 +1,17 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { Languages } from "lucide-react";
+import { Check, ChevronDown, Languages } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 const STORAGE_KEY = "happyboat-language";
+
+const LANGUAGE_OPTIONS = [
+  { value: "en", label: "English" },
+  { value: "km", label: "ខ្មែរ" },
+];
 
 const DICTIONARY = {
   en: {
@@ -35,6 +41,7 @@ const DICTIONARY = {
     accountDeactivateFailed: "Failed to deactivate account",
     accountCreateFailed: "Failed to create account",
     accountLoadFailed: "Failed to load accounts",
+    appLanguage: "App language",
     active: "active",
     activeOrders: "Active orders",
     accessToken: "Access token",
@@ -72,6 +79,8 @@ const DICTIONARY = {
     chooseSpiceLevel: "Choose Spice Level",
     bakongAccessToken: "Bakong access token",
     bakongPaymentSettings: "Bakong payment settings for new QR payments.",
+    beepOnly: "Beep only",
+    browserVoice: "Browser",
     clearFilters: "Clear filters",
     complete: "Complete",
     completeAll: "Complete all",
@@ -111,6 +120,7 @@ const DICTIONARY = {
     disable: "Disable",
     downloadReceipt: "Download receipt",
     each: "each",
+    englishSound: "English sound",
     enterPromoCode: "Enter a promo code.",
     expiresIn: "Expires in",
     expirationMinutes: "Expiration minutes",
@@ -130,17 +140,20 @@ const DICTIONARY = {
     installHappyBoat: "Install HappyBoat",
     installedHappyBoat: "HappyBoat installed",
     installPhonePrompt: "Add it to your phone for a faster app experience.",
+    installIosPrompt: "On iPhone, tap Share, then Add to Home Screen.",
     invalidImageType: "Only PNG, JPG, WebP, and GIF images are allowed.",
     invalidOtp: "Invalid OTP",
     invalidPromo: "Promo code is invalid.",
     kitchen: "Kitchen",
     kitchenPaidItems: "Paid items grouped for preparation",
+    khmerSound: "Khmer sound",
     languageButton: "ខ្មែរ",
     label: "Label",
     live: "Live",
     liveOrders: "Live Orders",
     liveRestaurantOps: "Live restaurant operations",
     loginSuccess: "Logged in successfully.",
+    logout: "Logout",
     loadingAnalytics: "Loading analytics...",
     loadingMenu: "Loading menu...",
     maxDiscountUsd: "Max discount USD",
@@ -251,11 +264,13 @@ const DICTIONARY = {
     showDetail: "Show detail",
     signInFailed: "Sign in failed",
     signIn: "Sign in",
+    serverVoice: "Server",
     otpSubtitle: "Enter the 6-digit code sent to {email}.",
     otpExpiredRequestNew: "OTP expired. Please request a new OTP.",
     otpSendFailed: "Could not send OTP.",
     otpSent: "OTP sent.",
     sortBy: "Sort by",
+    soundLanguage: "Sound language",
     sortNewest: "Newest first",
     sortOldest: "Oldest first",
     sortPayment: "Payment status",
@@ -344,6 +359,7 @@ const DICTIONARY = {
     accountDeactivateFailed: "បិទគណនីមិនបាន",
     accountCreateFailed: "បង្កើតគណនីមិនបាន",
     accountLoadFailed: "ផ្ទុកគណនីមិនបាន",
+    appLanguage: "ភាសាកម្មវិធី",
     active: "កំពុងដំណើរការ",
     activeOrders: "ការកម្មង់កំពុងដំណើរការ",
     accessToken: "Access token",
@@ -381,6 +397,8 @@ const DICTIONARY = {
     chooseSpiceLevel: "ជ្រើសកម្រិតហឹរ",
     bakongAccessToken: "Bakong access token",
     bakongPaymentSettings: "ការកំណត់ការទូទាត់ Bakong សម្រាប់ QR ថ្មី។",
+    beepOnly: "សំឡេងប៊ីបប៉ុណ្ណោះ",
+    browserVoice: "ឧបករណ៍",
     clearFilters: "សម្អាតតម្រង",
     complete: "បញ្ចប់",
     completeAll: "បញ្ចប់ទាំងអស់",
@@ -420,6 +438,7 @@ const DICTIONARY = {
     disable: "បិទ",
     downloadReceipt: "ទាញយកវិក្កយបត្រ",
     each: "ក្នុងមួយ",
+    englishSound: "សំឡេងអង់គ្លេស",
     enterPromoCode: "សូមបញ្ចូលកូដប្រូម៉ូសិន។",
     expiresIn: "ផុតកំណត់ក្នុង",
     expirationMinutes: "នាទីផុតកំណត់",
@@ -439,17 +458,20 @@ const DICTIONARY = {
     installHappyBoat: "ដំឡើង HappyBoat",
     installedHappyBoat: "បានដំឡើង HappyBoat",
     installPhonePrompt: "បន្ថែមទៅទូរស័ព្ទរបស់អ្នក ដើម្បីប្រើកម្មវិធីបានលឿនជាងមុន។",
+    installIosPrompt: "លើ iPhone សូមចុច Share បន្ទាប់មក Add to Home Screen។",
     invalidImageType: "អនុញ្ញាតតែរូបភាព PNG, JPG, WebP និង GIF ប៉ុណ្ណោះ។",
     invalidOtp: "OTP មិនត្រឹមត្រូវ",
     invalidPromo: "កូដប្រូម៉ូសិនមិនត្រឹមត្រូវ។",
     kitchen: "ផ្ទះបាយ",
     kitchenPaidItems: "ម្ហូបបានបង់ប្រាក់ សម្រាប់រៀបចំ",
+    khmerSound: "សំឡេងខ្មែរ",
     languageButton: "English",
     label: "ស្លាក",
     live: "ផ្ទាល់",
     liveOrders: "ការកម្មង់ផ្ទាល់",
     liveRestaurantOps: "ប្រតិបត្តិការហាងអាហារផ្ទាល់",
     loginSuccess: "បានចូលប្រើដោយជោគជ័យ។",
+    logout: "ចាកចេញ",
     loadingAnalytics: "កំពុងផ្ទុកវិភាគ...",
     loadingMenu: "កំពុងផ្ទុកម៉ឺនុយ...",
     maxDiscountUsd: "បញ្ចុះតម្លៃអតិបរមា USD",
@@ -560,11 +582,13 @@ const DICTIONARY = {
     showDetail: "បង្ហាញលម្អិត",
     signInFailed: "ចូលប្រើមិនបាន",
     signIn: "ចូលប្រើ",
+    serverVoice: "ម៉ាស៊ីនមេ",
     otpSubtitle: "បញ្ចូលលេខកូដ ៦ ខ្ទង់ ដែលបានផ្ញើទៅ {email}។",
     otpExpiredRequestNew: "OTP ផុតកំណត់។ សូមស្នើ OTP ថ្មី។",
     otpSendFailed: "មិនអាចផ្ញើ OTP បាន។",
     otpSent: "បានផ្ញើ OTP។",
     sortBy: "តម្រៀបតាម",
+    soundLanguage: "ភាសាសំឡេង",
     sortNewest: "ថ្មីមុន",
     sortOldest: "ចាស់មុន",
     sortPayment: "ស្ថានភាពទូទាត់",
@@ -670,12 +694,33 @@ export function useLanguage() {
 }
 
 export function LanguageToggle({ className }) {
-  const { t, toggleLanguage } = useLanguage();
+  const { language, setLanguage, t } = useLanguage();
+  const currentLanguage = LANGUAGE_OPTIONS.find((option) => option.value === language) || LANGUAGE_OPTIONS[0];
+
   return (
-    <Button type="button" variant="outline" className={cn("min-h-10 rounded-xl px-3 text-xs", className)} onClick={toggleLanguage} aria-label={t("changeLanguage")}>
-      <span className="sr-only">{t("changeLanguage")}</span>
-      <Languages className="h-4 w-4" />
-      <span className="font-bold leading-none">{t("languageButton")}</span>
-    </Button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          className={cn("min-h-10 rounded-xl px-3 text-xs", className)}
+          aria-label={t("changeLanguage")}
+        >
+          <Languages className="h-4 w-4" />
+          <span className="font-bold leading-none">{currentLanguage.label}</span>
+          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {LANGUAGE_OPTIONS.map((option) => (
+          <DropdownMenuItem key={option.value} onSelect={() => setLanguage(option.value)}>
+            <span className="flex h-4 w-4 items-center justify-center">
+              {language === option.value ? <Check className="h-4 w-4" /> : null}
+            </span>
+            <span className="font-medium">{option.label}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
