@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input, Select, Textarea } from '@/components/ui/input';
 import { API_BASE, api } from '@/lib/api';
-import { goeyToastOptions } from '@/lib/goey-toast-options';
+import { GOEY_TOAST_CLASS_NAMES, goeyToastOptions } from '@/lib/goey-toast-options';
 import { useBodyScrollLock } from '@/lib/use-body-scroll-lock';
 import { cn, displayUsd, khr, tags, usd } from '@/lib/utils';
 import { gooeyToast } from 'goey-toast';
@@ -41,6 +41,7 @@ const PRICE_FILTERS = [
 const CUSTOMER_STORAGE_TTL_MS = 12 * 60 * 60 * 1000;
 const MIN_CART_TOTAL_USD = 0.01;
 const CUSTOMER_ALERT_AFTER_MS = 10 * 60 * 1000;
+const KHQR_LOGO_WHITE_SRC = '/khqr/khqr-logo.svg';
 
 export default function CustomerOrderingApp({ tableNumber }) {
   const { t } = useLanguage();
@@ -161,6 +162,9 @@ export default function CustomerOrderingApp({ tableNumber }) {
           id: toastId,
           description: `${item.name} · ${t('quantity')}: ${item.quantity}`,
           icon: <ShoppingBag className="h-4 w-4" />,
+          classNames: {
+            actionButton: `${GOEY_TOAST_CLASS_NAMES.actionButton} happyboat-goey-toast-view-cart-action`,
+          },
           action: {
             label: t('viewCart'),
             onClick: () => {
@@ -1866,10 +1870,19 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
           {!isPaid && !isExpired ? (
             <>
               <div
-                className="mx-auto inline-flex rounded-2xl border border-border bg-white p-4 shadow-sm"
+                className="mx-auto w-full max-w-[292px] overflow-hidden rounded-2xl border border-border/60 bg-white text-slate-950 shadow-sm"
                 data-payment-qr={payment.id}
               >
-                <QRCodeSVG value={payment.khqrString} size={220} includeMargin level="M" />
+                <div className="flex h-14 items-center justify-center bg-[#e1232e] px-5">
+                  <img src={KHQR_LOGO_WHITE_SRC} alt="KHQR" className="h-8 w-auto" />
+                </div>
+                <div className="space-y-1 px-5 pt-4 text-left">
+                  <p className="text-sm font-semibold leading-none">HappyBoat</p>
+                  <p className="text-xs text-slate-500">{payment.paymentNumber}</p>
+                </div>
+                <div className="flex justify-center px-5 pb-5 pt-4">
+                  <QRCodeSVG value={payment.khqrString} size={220} includeMargin={false} level="M" />
+                </div>
               </div>
             </>
           ) : isPaid ? (
@@ -2478,8 +2491,11 @@ function downloadPaymentQrImage(order, payment, t) {
 
   const svgText = new XMLSerializer().serializeToString(svg);
   const svgUrl = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }));
-  loadCanvasImage(svgUrl)
-    .then((qrImage) => {
+  Promise.all([
+    loadCanvasImage(svgUrl),
+    loadCanvasImage(KHQR_LOGO_WHITE_SRC).catch(() => null),
+  ])
+    .then(([qrImage, khqrLogo]) => {
       const canvas = document.createElement('canvas');
       canvas.width = 400;
       canvas.height = 500;
@@ -2493,7 +2509,7 @@ function downloadPaymentQrImage(order, payment, t) {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      drawHappyBoatQrHeader(ctx, canvas.width);
+      drawKhqrQrHeader(ctx, canvas.width, khqrLogo);
 
       ctx.font = '500 13px sans-serif';
       ctx.fillStyle = '#4b5563';
@@ -2527,17 +2543,35 @@ function downloadPaymentQrImage(order, payment, t) {
     .catch(() => URL.revokeObjectURL(svgUrl));
 }
 
-function drawHappyBoatQrHeader(ctx, width) {
+function drawKhqrQrHeader(ctx, width, khqrLogo) {
   ctx.save();
   ctx.fillStyle = '#e31b23';
   ctx.fillRect(0, 0, width, 74);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '800 25px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('Happy Boat QR', width / 2, 46);
+
+  if (khqrLogo) {
+    const logoWidth = 166;
+    const logoHeight = 40;
+    const scale = Math.min(190 / logoWidth, 38 / logoHeight);
+    const targetWidth = logoWidth * scale;
+    const targetHeight = logoHeight * scale;
+    ctx.drawImage(
+      khqrLogo,
+      (width - targetWidth) / 2,
+      (74 - targetHeight) / 2,
+      targetWidth,
+      targetHeight
+    );
+  } else {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 25px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('KHQR', width / 2, 46);
+  }
+
   ctx.fillStyle = '#111827';
   ctx.font = '700 20px sans-serif';
-  ctx.fillText('KHQR', width / 2, 100);
+  ctx.textAlign = 'center';
+  ctx.fillText('HappyBoat', width / 2, 100);
   ctx.restore();
 }
 

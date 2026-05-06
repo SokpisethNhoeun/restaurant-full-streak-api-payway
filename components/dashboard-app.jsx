@@ -107,6 +107,7 @@ const ORDER_STATUS_FILTERS = [
   { value: 'PAID', labelKey: 'paid' },
   { value: 'RECEIVED', labelKey: 'receivedByStaff' },
   { value: 'PREPARING', labelKey: 'preparing' },
+  { value: 'READY', labelKey: 'readyForPickup' },
   { value: 'COMPLETED', labelKey: 'completed' },
   { value: 'CANCELLED', labelKey: 'cancelled' },
   { value: 'REJECTED', labelKey: 'rejected' },
@@ -157,6 +158,7 @@ const DASHBOARD_ALERT_AUDIO_FILES = {
 
 function createMerchantSettingsForm(settings = {}) {
   return {
+    email: settings.email || '',
     accessToken: '',
     merchantAccountId: settings.merchantAccountId || '',
     merchantName: settings.merchantName || '',
@@ -666,6 +668,7 @@ export default function DashboardApp() {
         method: 'PUT',
         body: JSON.stringify({
           verificationToken: merchantVerificationToken,
+          email: merchantSettings.email,
           accessToken: merchantSettings.accessToken,
           merchantAccountId: merchantSettings.merchantAccountId,
           merchantName: merchantSettings.merchantName,
@@ -732,7 +735,7 @@ export default function DashboardApp() {
     setLastUpdatedAt(new Date());
   }
   async function loadOrders(options = {}) {
-    const data = await request('/api/admin/orders');
+    const data = await request('/api/admin/orders?limit=200');
     mergeOrders(data, options);
     setLastUpdatedAt(new Date());
     return data;
@@ -1941,6 +1944,19 @@ function ChangeMerchantDetailsDialog({
                 </div>
               ) : null}
               <div className="grid gap-2">
+                <Label htmlFor="bakong-email">{t('bakongEmail')}</Label>
+                <Input
+                  id="bakong-email"
+                  value={settings.email}
+                  onChange={(event) =>
+                    onSettingsChange({ ...settings, email: event.target.value })
+                  }
+                  placeholder="merchant@example.com"
+                  type="email"
+                  disabled={settingsLoading || settingsSaving}
+                />
+              </div>
+              <div className="grid gap-2">
                 <Label htmlFor="bakong-access-token">{t('bakongAccessToken')}</Label>
                 <Input
                   id="bakong-access-token"
@@ -2126,8 +2142,8 @@ function OrdersView({
   return (
     <div className="grid gap-5 lg:grid-cols-[1fr_420px]">
       <Card>
-        <CardHeader className="flex-row items-center justify-between gap-2 flex-wrap">
-          <CardTitle className="flex items-center gap-2">
+        <CardHeader className="flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
+          <CardTitle className="flex min-w-0 items-center gap-2">
             {t('liveOrders')}
             <Badge tone="primary">{displayedOrders.length}</Badge>
           </CardTitle>
@@ -2252,7 +2268,7 @@ function OrdersView({
                   onClick={() => onSelect(order.id)}
                   className={`w-full rounded-md border bg-card p-3 text-left transition hover:border-primary ${needsAttention ? 'border-secondary shadow-sm shadow-secondary/10' : 'border-border'}`}
                 >
-                  <div className="flex items-start gap-3">
+                  <div className="flex min-w-0 items-start gap-3">
                     {firstItemImg ? (
                       <img
                         src={firstItemImg}
@@ -2264,8 +2280,8 @@ function OrdersView({
                       <div className="h-12 w-12 flex-shrink-0 rounded-md bg-muted" />
                     )}
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
                           <div className="font-semibold">{order.orderNumber}</div>
                           <div className="text-sm text-muted-foreground">{order.tableNumber}</div>
                           <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
@@ -2292,14 +2308,14 @@ function OrdersView({
                             </div>
                           ) : null}
                         </div>
-                        <div className="flex flex-col items-end gap-1">
+                        <div className="flex flex-wrap items-center gap-1 sm:flex-col sm:items-end">
                           <StatusBadge status={order.status} />
                           {needsAttention ? (
                             <AttentionBadge minutes={waitingMinutes(order, now)} />
                           ) : null}
                         </div>
                       </div>
-                      <div className="mt-1 flex items-center justify-between text-sm">
+                      <div className="mt-2 flex flex-col gap-1 text-sm sm:flex-row sm:items-center sm:justify-between">
                         <span>
                           {displayUsd(order.totalUsd)} / {khr(order.totalKhr)}
                         </span>
@@ -3832,12 +3848,39 @@ function ToggleSwitch({ checked, onChange }) {
 
 function TablesView({ tables, request, reload }) {
   const { t } = useLanguage();
-  const [form, setForm] = useState({ tableNumber: '', label: '', capacity: 4, active: true });
+  const emptyForm = { tableNumber: '', label: '', capacity: 4, active: true };
+  const [form, setForm] = useState(emptyForm);
+  const [editingTable, setEditingTable] = useState(null);
 
-  async function createTable(event) {
+  function resetTableForm() {
+    setEditingTable(null);
+    setForm(emptyForm);
+  }
+
+  function editTable(table) {
+    setEditingTable(table);
+    setForm({
+      tableNumber: String(table.tableNumber || '').toUpperCase(),
+      label: table.label || '',
+      capacity: Number(table.capacity || 1),
+      active: Boolean(table.active),
+    });
+  }
+
+  async function saveTable(event) {
     event.preventDefault();
-    await request('/api/admin/tables', { method: 'POST', body: JSON.stringify(form) });
-    setForm({ tableNumber: '', label: '', capacity: 4, active: true });
+    const payload = {
+      ...form,
+      tableNumber: form.tableNumber.trim().toUpperCase(),
+      label: form.label.trim(),
+      capacity: Number(form.capacity || 1),
+      active: Boolean(form.active),
+    };
+    await request(editingTable ? `/api/admin/tables/${editingTable.id}` : '/api/admin/tables', {
+      method: editingTable ? 'PUT' : 'POST',
+      body: JSON.stringify(payload),
+    });
+    resetTableForm();
     reload();
   }
 
@@ -3854,12 +3897,17 @@ function TablesView({ tables, request, reload }) {
 
   return (
     <div className="grid gap-5 lg:grid-cols-[320px_1fr]">
-      <Card className="lg:sticky lg:top-24 lg:self-start">
-        <CardHeader>
-          <CardTitle>{t('newTable')}</CardTitle>
+      <Card className="min-w-0 lg:sticky lg:top-24 lg:self-start">
+        <CardHeader className="flex-row items-center justify-between gap-3">
+          <CardTitle>{editingTable ? t('editTable') : t('newTable')}</CardTitle>
+          {editingTable ? (
+            <Button type="button" variant="outline" onClick={resetTableForm}>
+              {t('new')}
+            </Button>
+          ) : null}
         </CardHeader>
         <CardContent className="max-h-[calc(100vh-9rem)] overflow-auto">
-          <form className="space-y-3" onSubmit={createTable}>
+          <form className="space-y-3" onSubmit={saveTable}>
             <Input
               value={form.tableNumber}
               onChange={(e) => setForm({ ...form, tableNumber: e.target.value.toUpperCase() })}
@@ -3879,7 +3927,22 @@ function TablesView({ tables, request, reload }) {
               type="number"
               min="1"
             />
-            <Button className="w-full">{t('create')}</Button>
+            <Select
+              value={form.active ? 'true' : 'false'}
+              onChange={(e) => setForm({ ...form, active: e.target.value === 'true' })}
+              aria-label={t('active')}
+            >
+              <option value="true">{t('available')}</option>
+              <option value="false">{t('inactive')}</option>
+            </Select>
+            <div className="grid grid-cols-2 gap-2">
+              <Button className="w-full">
+                {editingTable ? t('save') : t('create')}
+              </Button>
+              <Button type="button" variant="outline" className="w-full" onClick={resetTableForm}>
+                {t('clearFilters')}
+              </Button>
+            </div>
           </form>
         </CardContent>
       </Card>
@@ -3905,6 +3968,10 @@ function TablesView({ tables, request, reload }) {
                   <QRCodeSVG value={qrUrl} size={160} includeMargin />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
+                  <Button variant="outline" onClick={() => editTable(table)}>
+                    <Pencil className="h-4 w-4" />
+                    {t('edit')}
+                  </Button>
                   <Button
                     variant="outline"
                     onClick={() => downloadSvg(table.id, `${table.tableNumber}.svg`)}
@@ -3912,6 +3979,8 @@ function TablesView({ tables, request, reload }) {
                     <Download className="h-4 w-4" />
                     SVG
                   </Button>
+                </div>
+                <div>
                   <Button variant="outline" onClick={() => printTable(table)}>
                     <Printer className="h-4 w-4" />
                     {t('print')}
@@ -3989,8 +4058,8 @@ function PaymentsView({ payments, request, reload }) {
 
   return (
     <div className="grid gap-5 lg:grid-cols-[1fr_440px]">
-      <Card>
-        <CardHeader className="flex-row items-center justify-between">
+      <Card className="min-w-0">
+        <CardHeader className="flex-row items-center justify-between gap-3">
           <CardTitle>{t('payments')}</CardTitle>
           <Button variant="outline" size="icon" onClick={reload} aria-label={t('refresh')}>
             <RefreshCw className="h-4 w-4" />
@@ -4009,16 +4078,18 @@ function PaymentsView({ payments, request, reload }) {
             <button
               key={payment.id}
               onClick={() => select(payment.id)}
-              className="w-full rounded-md border border-border p-4 text-left hover:border-primary"
+              className="w-full rounded-md border border-border p-3 text-left hover:border-primary sm:p-4"
             >
-              <div className="flex justify-between gap-3">
-                <div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
                   <div className="font-semibold">{payment.paymentNumber}</div>
-                  <div className="text-sm text-muted-foreground">
+                  <div className="break-words text-sm text-muted-foreground">
                     {payment.orderNumber} - {payment.tableNumber}
                   </div>
                 </div>
-                <StatusBadge status={payment.status} />
+                <div className="self-start sm:self-auto">
+                  <StatusBadge status={payment.status} />
+                </div>
               </div>
               <div className="mt-2 text-sm">
                 {displayUsd(payment.amountUsd)} / {khr(payment.amountKhr)}
@@ -4027,7 +4098,7 @@ function PaymentsView({ payments, request, reload }) {
           ))}
         </CardContent>
       </Card>
-      <Card className="lg:sticky lg:top-24 lg:self-start">
+      <Card className="min-w-0 lg:sticky lg:top-24 lg:self-start">
         <CardHeader>
           <CardTitle>{t('transactionLog')}</CardTitle>
         </CardHeader>
@@ -4037,12 +4108,14 @@ function PaymentsView({ payments, request, reload }) {
           ) : (
             <div className="space-y-3">
               <div className="text-sm">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
                     <div className="font-semibold">{selected.paymentNumber}</div>
                     <div className="break-all text-muted-foreground">{selected.khqrMd5}</div>
                   </div>
-                  <StatusBadge status={selected.status} />
+                  <div className="self-start sm:self-auto">
+                    <StatusBadge status={selected.status} />
+                  </div>
                 </div>
                 <div className="mt-3 grid gap-2 rounded-md bg-muted p-3 text-xs">
                   <div>
@@ -4123,6 +4196,7 @@ function PromoCodesView({ promos, request, reload }) {
       discountValue: String(promo.discountValue ?? ''),
       maxDiscountUsd: String(promo.maxDiscountUsd ?? ''),
       active: Boolean(promo.active),
+      expiredDate: promo.endsAt ? dateInputValue(new Date(promo.endsAt)) : '',
     });
   }
 
@@ -4137,6 +4211,7 @@ function PromoCodesView({ promos, request, reload }) {
         form.discountType === 'PERCENT' && form.maxDiscountUsd !== ''
           ? Number(form.maxDiscountUsd)
           : null,
+      expiredDate: form.expiredDate?.trim() || null,
       active: Boolean(form.active),
     };
     await request(editingPromo ? `/api/admin/promos/${editingPromo.id}` : '/api/admin/promos', {
@@ -4149,7 +4224,7 @@ function PromoCodesView({ promos, request, reload }) {
 
   return (
     <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
-      <Card className="lg:sticky lg:top-24 lg:self-start">
+      <Card className="min-w-0 lg:sticky lg:top-24 lg:self-start">
         <CardHeader className="flex-row items-center justify-between gap-3">
           <CardTitle>{editingPromo ? t('editPromoCode') : t('newPromoCode')}</CardTitle>
           {editingPromo ? (
@@ -4222,7 +4297,7 @@ function PromoCodesView({ promos, request, reload }) {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="min-w-0">
         <CardHeader>
           <CardTitle>{t('promoCodes')}</CardTitle>
         </CardHeader>
@@ -4267,7 +4342,7 @@ function AnalyticsView({ analytics, error, lastUpdatedAt, onRefresh }) {
   
   if (!analytics) {
     return (
-      <Card>
+      <Card className="min-w-0">
         <CardContent className="flex min-h-48 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
           <span>{error || t('loadingAnalytics')}</span>
           {error ? (
@@ -5180,7 +5255,7 @@ function AdminAccountsView({ request, reload }) {
 
   return (
     <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
-      <Card className="lg:sticky lg:top-24 lg:self-start">
+      <Card className="min-w-0 lg:sticky lg:top-24 lg:self-start">
         <CardHeader>
           <CardTitle>{t('createAdmin')}</CardTitle>
         </CardHeader>
@@ -5211,7 +5286,7 @@ function AdminAccountsView({ request, reload }) {
           </form>
         </CardContent>
       </Card>
-      <Card>
+      <Card className="min-w-0">
         <CardHeader>
           <CardTitle>{t('adminAccounts')}</CardTitle>
         </CardHeader>
@@ -5221,9 +5296,12 @@ function AdminAccountsView({ request, reload }) {
               <p className="text-sm text-muted-foreground">{t('noAccounts')}</p>
             ) : (
               accounts.map((account) => (
-                <div key={account.username} className="flex items-center justify-between rounded-md border p-3">
-                  <div>
-                    <div className="font-medium">{account.username}</div>
+                <div
+                  key={account.username}
+                  className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <div className="break-all font-medium">{account.username}</div>
                     <div className="text-sm text-muted-foreground">
                       {adminRoleLabel(account.role, t)}
                     </div>
@@ -5233,6 +5311,7 @@ function AdminAccountsView({ request, reload }) {
                       type="button"
                       variant="outline"
                       size="sm"
+                      className="w-full sm:w-auto"
                       onClick={() => deactivateAccount(account.username)}
                     >
                       {t('deactivate')}
