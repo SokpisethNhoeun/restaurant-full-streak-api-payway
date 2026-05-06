@@ -139,12 +139,12 @@ textarea {
 
 .happyboat-goey-toast-view-cart-action {
   border-color: #639922 !important;
-  background: transparent !important;
-  color: green !important;
+  background: #879773 !important;
+  color: rgb(0, 255, 0) !important;
 }
 
 .happyboat-goey-toast-view-cart-action:hover {
-  background: #879773 !important;
+ background: transparent !important;
 }
 
 .happyboat-goey-toast .gooey-progressWrapper {
