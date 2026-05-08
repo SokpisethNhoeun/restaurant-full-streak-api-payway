@@ -1,4 +1,4 @@
-const SW_VERSION = "happyboat-pwa-v3";
+const SW_VERSION = "happyboat-pwa-v4";
 const APP_SHELL_CACHE = `${SW_VERSION}-shell`;
 const STATIC_CACHE = `${SW_VERSION}-static`;
 const PAGE_CACHE = `${SW_VERSION}-pages`;
@@ -69,6 +69,11 @@ self.addEventListener("fetch", (event) => {
 
   if (isStaticAsset(url, request)) {
     event.respondWith(cacheFirst(request, STATIC_CACHE));
+    return;
+  }
+
+  if (isUploadedMenuImage(url)) {
+    event.respondWith(networkFirstImage(request, IMAGE_CACHE));
     return;
   }
 
@@ -149,6 +154,21 @@ async function networkFirst(request, cacheName) {
   }
 }
 
+async function networkFirstImage(request, cacheName) {
+  try {
+    const response = await fetch(request);
+    if (isCacheableImageResponse(response)) {
+      const cache = await caches.open(cacheName);
+      cache.put(request, response.clone());
+    }
+    return response;
+  } catch {
+    const cached = await caches.match(request);
+    if (cached) return cached;
+    throw new Error("Network unavailable and no cached image response found.");
+  }
+}
+
 async function cacheFirst(request, cacheName) {
   const cached = await caches.match(request);
   if (cached) return cached;
@@ -186,8 +206,19 @@ function isCacheableApi(url) {
   return API_PATHS_TO_CACHE.some((path) => url.pathname.startsWith(path));
 }
 
+function isUploadedMenuImage(url) {
+  return url.origin === self.location.origin && url.pathname.startsWith("/api/public/uploads/menu-images/");
+}
+
 function isCacheableResponse(response) {
   return response && (response.ok || response.type === "opaque");
+}
+
+function isCacheableImageResponse(response) {
+  if (!response) return false;
+  if (response.type === "opaque") return true;
+  const contentType = response.headers.get("content-type") || "";
+  return response.ok && contentType.toLowerCase().startsWith("image/");
 }
 
 function safeJson(value) {
