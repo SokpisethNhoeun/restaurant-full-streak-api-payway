@@ -19,6 +19,8 @@ import {
   ChevronUp,
   Clock,
   Download,
+  FileText,
+  Maximize2,
   Minus,
   Plus,
   Search,
@@ -2011,6 +2013,8 @@ function CustomizeItem({ item, addons, spiceLevels = [], options, onClose, onAdd
   const [selectedSpiceLevel, setSelectedSpiceLevel] = useState(defaultSpiceLevel);
   const [selectedAddons, setSelectedAddons] = useState(defaultAddons);
   const [specialInstructions, setSpecialInstructions] = useState('');
+  const [showFullDescription, setShowFullDescription] = useState(false);
+  const [showFullImage, setShowFullImage] = useState(false);
 
   const spiceRequired =
     Boolean(item.isSpiceRequired) || availableSpiceLevels.some((spice) => Boolean(spice.required));
@@ -2023,6 +2027,7 @@ function CustomizeItem({ item, addons, spiceLevels = [], options, onClose, onAdd
   const selectedOptionIds = selectedSpiceLevel?.optionGroup === 'Spice' ? [selectedSpiceLevel.id] : [];
   const spiceName = selectedSpiceLevel ? spiceLevelLabel(selectedSpiceLevel) : '';
   const addDisabled = spiceRequired && hasSpiceLevels && !selectedSpiceLevel;
+  const productDescription = item.description?.trim();
 
   function addItemToCart() {
     if (addDisabled) return;
@@ -2092,33 +2097,74 @@ function CustomizeItem({ item, addons, spiceLevels = [], options, onClose, onAdd
   );
 
   return (
-    <div className="fixed inset-0 z-30 flex items-end bg-black/40 backdrop-blur-sm sm:items-center sm:p-4">
-      <div className="bottom-sheet-animate max-h-[92vh] w-full overflow-auto rounded-t-2xl bg-card text-card-foreground shadow-xl sm:mx-auto sm:max-w-lg sm:rounded-2xl">
-        {/* Item header */}
-        <div className="relative">
-          <div className="relative aspect-[3/1] overflow-hidden bg-muted">
-            <MenuImage
-              src={item.imageUrl}
-              alt={item.name}
-              className="object-cover"
-              sizes="(max-width: 640px) 100vw, 512px"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-card/90 via-card/20 to-transparent" />
+    <>
+      <div className="fixed inset-0 z-30 flex items-end bg-black/40 backdrop-blur-sm sm:items-center sm:p-4">
+        <div className="bottom-sheet-animate max-h-[92vh] w-full overflow-auto rounded-t-2xl bg-card text-card-foreground shadow-xl sm:mx-auto sm:max-w-lg sm:rounded-2xl">
+          {/* Item header */}
+          <div className="relative">
+            <div className="relative aspect-[3/1] overflow-hidden bg-muted">
+              <MenuImage
+                src={item.imageUrl}
+                alt={item.name}
+                className="object-cover"
+                sizes="(max-width: 640px) 100vw, 512px"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-card/90 via-card/20 to-transparent" />
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowFullImage(true)}
+              className="absolute left-3 top-3 flex h-9 items-center gap-1.5 rounded-full bg-background/85 px-3 text-xs font-semibold text-foreground shadow-sm backdrop-blur-sm hover:bg-background"
+              aria-label={t('viewFullImage')}
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+              {t('viewFullImage')}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-background/80 text-foreground backdrop-blur-sm hover:bg-background"
+              aria-label={t('close')}
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <div className="absolute bottom-3 left-4 right-14">
+              <h2 className="text-lg font-bold leading-tight">{item.name}</h2>
+              {productDescription ? (
+                <p className="mt-0.5 line-clamp-1 text-sm text-muted-foreground">
+                  {productDescription}
+                </p>
+              ) : null}
+            </div>
           </div>
-          <button
-            onClick={onClose}
-            className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-background/80 text-foreground backdrop-blur-sm hover:bg-background"
-            aria-label={t('close')}
-          >
-            <X className="h-4 w-4" />
-          </button>
-          <div className="absolute bottom-3 left-4 right-14">
-            <h2 className="text-lg font-bold leading-tight">{item.name}</h2>
-            <p className="mt-0.5 line-clamp-1 text-sm text-muted-foreground">{item.description}</p>
-          </div>
-        </div>
 
-        <div className="space-y-5 p-4">
+          <div className="space-y-5 p-4">
+          {productDescription ? (
+            <div className="rounded-2xl border border-border/60 bg-muted/25 p-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <FileText className="h-4 w-4 shrink-0 text-primary" />
+                  <h3 className="truncate text-sm font-bold">{t('fullDescription')}</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowFullDescription((current) => !current)}
+                  className="shrink-0 text-xs font-semibold text-primary hover:underline"
+                >
+                  {showFullDescription ? t('hideFullDescription') : t('showFullDescription')}
+                </button>
+              </div>
+              <p
+                className={cn(
+                  'text-sm leading-relaxed text-muted-foreground',
+                  showFullDescription ? '' : 'line-clamp-2'
+                )}
+              >
+                {productDescription}
+              </p>
+            </div>
+          ) : null}
+
           {hasSpiceLevels ? (
             <div>
               <h3 className="mb-3 text-base font-bold">{t('chooseSpiceLevel')}</h3>
@@ -2240,27 +2286,54 @@ function CustomizeItem({ item, addons, spiceLevels = [], options, onClose, onAdd
             />
           </div>
           {quantityAndPrice}
-        </div>
+          </div>
 
-        {/* Footer actions */}
-        <div className="flex gap-2.5 border-t border-border/60 p-4">
-          <Button
-            variant="outline"
-            className="h-11 flex-1 rounded-xl"
-            onClick={onClose}
-          >
-            {t('cancel')}
-          </Button>
-          <Button
-            className="h-11 flex-1 rounded-xl font-semibold shadow-sm"
-            onClick={addItemToCart}
-            disabled={addDisabled}
-          >
-            {t('addToCart')} · {usd(lineUsd)}
-          </Button>
+          {/* Footer actions */}
+          <div className="flex gap-2.5 border-t border-border/60 p-4">
+            <Button
+              variant="outline"
+              className="h-11 flex-1 rounded-xl"
+              onClick={onClose}
+            >
+              {t('cancel')}
+            </Button>
+            <Button
+              className="h-11 flex-1 rounded-xl font-semibold shadow-sm"
+              onClick={addItemToCart}
+              disabled={addDisabled}
+            >
+              {t('addToCart')} · {usd(lineUsd)}
+            </Button>
+          </div>
         </div>
       </div>
-    </div>
+      {showFullImage ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
+          onClick={() => setShowFullImage(false)}
+        >
+          <button
+            type="button"
+            onClick={() => setShowFullImage(false)}
+            className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/12 text-white backdrop-blur-sm hover:bg-white/20"
+            aria-label={t('close')}
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <div
+            className="relative h-[82vh] w-full max-w-5xl overflow-hidden rounded-xl bg-black"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <MenuImage
+              src={item.imageUrl}
+              alt={item.name}
+              className="object-contain"
+              sizes="100vw"
+            />
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
