@@ -1,4 +1,4 @@
-const SW_VERSION = "happyboat-pwa-v2";
+const SW_VERSION = "happyboat-pwa-v3";
 const APP_SHELL_CACHE = `${SW_VERSION}-shell`;
 const STATIC_CACHE = `${SW_VERSION}-static`;
 const PAGE_CACHE = `${SW_VERSION}-pages`;

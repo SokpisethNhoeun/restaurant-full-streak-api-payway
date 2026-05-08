@@ -2955,6 +2955,19 @@ function compactAddons(addons = []) {
     .filter((addon) => addon.name);
 }
 
+function menuItemPayload(form) {
+  return {
+    ...form,
+    priceUsd: Number(form.priceUsd),
+    priceKhr: null,
+    available: Boolean(form.available),
+    sortOrder: Number(form.sortOrder || 0),
+    isSpiceRequired: Boolean(form.isSpiceRequired),
+    spiceLevels: compactSpiceLevels(form.spiceLevels),
+    addons: compactAddons(form.addons),
+  };
+}
+
 function MenuView({ menu, request, reload }) {
   const { t } = useLanguage();
   const [form, setForm] = useState(() => createMenuForm());
@@ -3184,7 +3197,16 @@ function MenuView({ menu, request, reload }) {
         method: 'POST',
         body: data,
       });
-      setForm((current) => ({ ...current, imageUrl: uploaded.url }));
+      const nextForm = { ...form, imageUrl: uploaded.url };
+      setForm(nextForm);
+      if (editingItem) {
+        await request(`/api/admin/menu/items/${editingItem.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(menuItemPayload(nextForm)),
+        });
+        setMessage(t('menuItemUpdated'));
+        reload();
+      }
     } catch (error) {
       setMessage(formatApiError(error, t('uploadFailed')));
     } finally {
@@ -3195,16 +3217,7 @@ function MenuView({ menu, request, reload }) {
   async function saveItem(event) {
     event.preventDefault();
     setMessage('');
-    const payload = {
-      ...form,
-      priceUsd: Number(form.priceUsd),
-      priceKhr: null,
-      available: Boolean(form.available),
-      sortOrder: Number(form.sortOrder || 0),
-      isSpiceRequired: Boolean(form.isSpiceRequired),
-      spiceLevels: compactSpiceLevels(form.spiceLevels),
-      addons: compactAddons(form.addons),
-    };
+    const payload = menuItemPayload(form);
     await request(
       editingItem ? `/api/admin/menu/items/${editingItem.id}` : '/api/admin/menu/items',
       {
