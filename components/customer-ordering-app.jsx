@@ -1,13 +1,13 @@
 'use client';
 
 import { LanguageToggle, useLanguage } from '@/components/language-provider';
+import { MenuImage } from '@/components/menu-image';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input, Select, Textarea } from '@/components/ui/input';
 import { API_BASE, api } from '@/lib/api';
 import { GOEY_TOAST_CLASS_NAMES, goeyToastOptions } from '@/lib/goey-toast-options';
-import { displayImageUrl, replaceBrokenImage } from '@/lib/image-url';
 import { useBodyScrollLock } from '@/lib/use-body-scroll-lock';
 import { cn, displayUsd, khr, tags, usd } from '@/lib/utils';
 import { gooeyToast } from 'goey-toast';
@@ -1259,11 +1259,11 @@ function MenuCard({ item, onSelect }) {
     >
       {/* Image */}
       <div className="relative aspect-square overflow-hidden bg-muted sm:aspect-[16/10]">
-        <img
-          src={displayImageUrl(item.imageUrl)}
+        <MenuImage
+          src={item.imageUrl}
           alt={item.name}
-          className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-          onError={replaceBrokenImage}
+          className="object-cover transition-transform duration-500 group-hover:scale-105"
+          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 260px"
         />
         {!item.available ? (
           <div className="absolute inset-0 flex items-center justify-center bg-background/70 backdrop-blur-sm">
@@ -1334,12 +1334,9 @@ function CartLineItem({ item, onDecrease, onIncrease, onRemove, controlSize = 's
 
   return (
     <div className="relative flex gap-3 rounded-2xl border border-border/60 bg-card p-4 pr-10">
-      <img
-        src={displayImageUrl(item.imageUrl)}
-        alt={item.name}
-        className="h-14 w-14 shrink-0 rounded-xl object-cover"
-        onError={replaceBrokenImage}
-      />
+      <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-muted">
+        <MenuImage src={item.imageUrl} alt={item.name} sizes="56px" />
+      </div>
       <button
         onClick={onRemove}
         aria-label={t('removeItem')}
@@ -1407,12 +1404,9 @@ function OrderDetailMiniItems({ order }) {
           key={item.id || `${item.menuItemId}-${index}`}
           className="flex gap-2 rounded-xl bg-muted/30 p-2.5"
         >
-          <img
-            src={displayImageUrl(item.imageUrl)}
-            alt={item.name}
-            className="h-12 w-12 shrink-0 rounded-xl object-cover"
-            onError={replaceBrokenImage}
-          />
+          <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-muted">
+            <MenuImage src={item.imageUrl} alt={item.name || item.itemName} sizes="48px" />
+          </div>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-bold leading-tight">{item.name || item.itemName}</p>
             <p className="text-xs text-muted-foreground">x{item.quantity}</p>
@@ -2102,12 +2096,12 @@ function CustomizeItem({ item, addons, spiceLevels = [], options, onClose, onAdd
       <div className="bottom-sheet-animate max-h-[92vh] w-full overflow-auto rounded-t-2xl bg-card text-card-foreground shadow-xl sm:mx-auto sm:max-w-lg sm:rounded-2xl">
         {/* Item header */}
         <div className="relative">
-          <div className="aspect-[3/1] overflow-hidden bg-muted">
-            <img
-              src={displayImageUrl(item.imageUrl)}
+          <div className="relative aspect-[3/1] overflow-hidden bg-muted">
+            <MenuImage
+              src={item.imageUrl}
               alt={item.name}
-              className="h-full w-full object-cover"
-              onError={replaceBrokenImage}
+              className="object-cover"
+              sizes="(max-width: 640px) 100vw, 512px"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-card/90 via-card/20 to-transparent" />
           </div>

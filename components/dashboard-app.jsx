@@ -1,6 +1,7 @@
 'use client';
 
 import { LanguageToggle, useLanguage } from '@/components/language-provider';
+import { MenuImage } from '@/components/menu-image';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -39,7 +40,6 @@ import {
 } from '@/components/ui/sidebar';
 import { API_BASE, WS_URL, api } from '@/lib/api';
 import { goeyToastOptions } from '@/lib/goey-toast-options';
-import { displayImageUrl, replaceBrokenImage } from '@/lib/image-url';
 import { useBodyScrollLock } from '@/lib/use-body-scroll-lock';
 import { cn, displayUsd, formatDuration, khr, tags, usd } from '@/lib/utils';
 import { Client } from '@stomp/stompjs';
@@ -2259,9 +2259,7 @@ function OrdersView({
             <p className="text-sm text-muted-foreground">{t('noOrdersFilter')}</p>
           ) : (
             displayedOrders.map((order) => {
-              const firstItemImg = displayImageUrl(
-                order.firstItemImageUrl || order.items?.[0]?.imageUrl
-              );
+              const firstItemImg = order.firstItemImageUrl || order.items?.[0]?.imageUrl;
               const firstItemName = order.firstItemName || order.items?.[0]?.itemName;
               const firstCategoryName = order.firstCategoryName;
               const needsAttention = needsKitchenAttention(order, now);
@@ -2273,12 +2271,9 @@ function OrdersView({
                 >
                   <div className="flex min-w-0 items-start gap-3">
                     {firstItemImg ? (
-                      <img
-                        src={firstItemImg}
-                        alt=""
-                        className="h-12 w-12 flex-shrink-0 rounded-md object-cover"
-                        onError={replaceBrokenImage}
-                      />
+                      <div className="relative h-12 w-12 flex-shrink-0 overflow-hidden rounded-md bg-muted">
+                        <MenuImage src={firstItemImg} alt="" sizes="48px" />
+                      </div>
                     ) : (
                       <div className="h-12 w-12 flex-shrink-0 rounded-md bg-muted" />
                     )}
@@ -2463,22 +2458,19 @@ function OrderDetailContent({
               const spiceLabel = orderItemSpiceLabel(item);
               const spiceTotalUsd = orderItemSpiceTotalUsd(item);
               return (
-            <div className="flex gap-3">
-              {item.imageUrl ? (
-                <img
-                  src={displayImageUrl(item.imageUrl)}
-                  alt={item.itemName}
-                  className="h-14 w-14 flex-shrink-0 rounded-md object-cover"
-                  onError={replaceBrokenImage}
-                />
-              ) : (
-                <div className="h-14 w-14 flex-shrink-0 rounded-md bg-muted" />
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="flex justify-between gap-3">
-                  <span className="font-medium">
-                    {item.quantity} x {item.itemName}
-                  </span>
+                <div className="flex gap-3">
+                  {item.imageUrl ? (
+                    <div className="relative h-14 w-14 flex-shrink-0 overflow-hidden rounded-md bg-muted">
+                      <MenuImage src={item.imageUrl} alt={item.itemName} sizes="56px" />
+                    </div>
+                  ) : (
+                    <div className="h-14 w-14 flex-shrink-0 rounded-md bg-muted" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex justify-between gap-3">
+                      <span className="font-medium">
+                        {item.quantity} x {item.itemName}
+                      </span>
                   <span className="whitespace-nowrap">{displayUsd(item.subtotalUsd)}</span>
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -2721,7 +2713,6 @@ function KitchenView({
 
 function KitchenItemCard({ item, now, onGroupStatus, onItemStatus, updatingItemIds }) {
   const { t } = useLanguage();
-  const imageUrl = displayImageUrl(item.imageUrl);
   const isComplete = item.kitchenStatus === 'COMPLETED';
   const isGroupUpdating = item.itemIds.some((itemId) => updatingItemIds.has(itemId));
   const pendingItemIds = item.rows
@@ -2735,12 +2726,12 @@ function KitchenItemCard({ item, now, onGroupStatus, onItemStatus, updatingItemI
 
   return (
     <Card className="overflow-hidden">
-      <div className="aspect-[5/3] bg-muted">
-        <img
-          src={imageUrl}
+      <div className="relative aspect-[5/3] bg-muted">
+        <MenuImage
+          src={item.imageUrl}
           alt={item.itemName}
-          className="h-full w-full object-cover"
-          onError={replaceBrokenImage}
+          className="object-cover"
+          sizes="(max-width: 768px) 100vw, 360px"
         />
       </div>
       <CardContent className="flex flex-col gap-3 p-4">
@@ -3813,12 +3804,9 @@ function MenuView({ menu, request, reload }) {
           {items.map((item) => (
             <div key={item.id} className="flex h-full flex-col rounded-md border border-border p-3">
               <div className="flex flex-1 flex-col items-center gap-3 text-center">
-                <img
-                  src={displayImageUrl(item.imageUrl)}
-                  alt={item.name}
-                  className="h-24 w-24 rounded-md object-cover"
-                  onError={replaceBrokenImage}
-                />
+                <div className="relative h-24 w-24 overflow-hidden rounded-md bg-muted">
+                  <MenuImage src={item.imageUrl} alt={item.name} sizes="96px" />
+                </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-col items-center gap-2">
                     <h3 className="line-clamp-2 min-h-10 font-semibold">{item.name}</h3>

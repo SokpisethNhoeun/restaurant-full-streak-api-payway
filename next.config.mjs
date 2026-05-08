@@ -1,5 +1,47 @@
+const minioBucket = process.env.MINIO_BUCKET || "happyboat-menu-images";
+
+const configuredMinioPattern = imageRemotePatternFromUrl(
+  process.env.MINIO_PUBLIC_URL || process.env.NEXT_PUBLIC_MINIO_PUBLIC_URL
+);
+
+const imageRemotePatterns = uniqueRemotePatterns([
+  {
+    protocol: "http",
+    hostname: "18.138.186.66",
+    port: "9000",
+    pathname: `/${minioBucket}/**`
+  },
+  {
+    protocol: "http",
+    hostname: "localhost",
+    port: "9000",
+    pathname: `/${minioBucket}/**`
+  },
+  {
+    protocol: "http",
+    hostname: "127.0.0.1",
+    port: "9000",
+    pathname: `/${minioBucket}/**`
+  },
+  {
+    protocol: "http",
+    hostname: "minio",
+    port: "9000",
+    pathname: `/${minioBucket}/**`
+  },
+  {
+    protocol: "https",
+    hostname: "images.unsplash.com",
+    pathname: "/**"
+  },
+  configuredMinioPattern
+]);
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  images: {
+    remotePatterns: imageRemotePatterns
+  },
   async rewrites() {
     const backendUrl = process.env.BACKEND_INTERNAL_URL || process.env.NEXT_PUBLIC_API_BASE_URL;
     if (!backendUrl) {
@@ -64,3 +106,31 @@ const nextConfig = {
 };
 
 export default nextConfig;
+
+function imageRemotePatternFromUrl(value) {
+  if (!value) return null;
+
+  try {
+    const url = new URL(value);
+    const pathname = url.pathname.replace(/\/$/, "") || `/${minioBucket}`;
+    return {
+      protocol: url.protocol.replace(":", ""),
+      hostname: url.hostname,
+      port: url.port,
+      pathname: `${pathname}/**`
+    };
+  } catch {
+    return null;
+  }
+}
+
+function uniqueRemotePatterns(patterns) {
+  const seen = new Set();
+  return patterns.filter((pattern) => {
+    if (!pattern) return false;
+    const key = `${pattern.protocol}:${pattern.hostname}:${pattern.port || ""}:${pattern.pathname || ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
