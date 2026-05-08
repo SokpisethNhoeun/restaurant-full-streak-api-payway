@@ -1,6 +1,6 @@
-import CustomerOrderingApp from "@/components/customer-ordering-app";
+import CustomerOrderingPageShell from '@/components/customer-ordering-page-shell';
 
 export default async function TablePage({ params }) {
   const { tableNumber } = await params;
-  return <CustomerOrderingApp tableNumber={tableNumber} />;
+  return <CustomerOrderingPageShell tableNumber={tableNumber} />;
 }

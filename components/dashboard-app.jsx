@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/sidebar';
 import { API_BASE, WS_URL, api } from '@/lib/api';
 import { goeyToastOptions } from '@/lib/goey-toast-options';
+import { displayImageUrl, replaceBrokenImage } from '@/lib/image-url';
 import { useBodyScrollLock } from '@/lib/use-body-scroll-lock';
 import { cn, displayUsd, formatDuration, khr, tags, usd } from '@/lib/utils';
 import { Client } from '@stomp/stompjs';
@@ -78,9 +79,8 @@ import {
   X,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import SockJS from 'sockjs-client';
-import AnalyticsLineChart from './analytics-line-chart';
 
 const SORT_OPTIONS = [
   { value: 'time_desc', labelKey: 'sortNewest' },
@@ -124,6 +124,9 @@ const KITCHEN_TIME_FILTERS = [
 
 const DASHBOARD_SESSION_HINT = 'happyboat-dashboard-session';
 const DASHBOARD_TOKEN_KEY = 'happyboat-dashboard-token';
+const OTP_EXPIRY_FALLBACK_SECONDS = 5 * 60;
+
+const AnalyticsLineChart = lazy(() => import('./analytics-line-chart'));
 const DASHBOARD_SOUND_READY_KEY = 'happyboat-dashboard-sound-ready';
 const DASHBOARD_SOUND_LANGUAGE_KEY = 'happyboat-dashboard-sound-language';
 const ORDER_ATTENTION_MS = 10 * 60 * 1000;
@@ -473,7 +476,7 @@ export default function DashboardApp() {
     setOtpSession({
       sessionToken: challenge.sessionToken,
       maskedEmail: challenge.maskedEmail || maskEmail(username),
-      expiresAt: now + Number(challenge.expiresInSeconds || 120) * 1000,
+      expiresAt: now + Number(challenge.expiresInSeconds || OTP_EXPIRY_FALLBACK_SECONDS) * 1000,
       resendAt: now + Number(challenge.resendAvailableInSeconds || 30) * 1000,
     });
     setOtpDigits(['', '', '', '', '', '']);
@@ -590,7 +593,7 @@ export default function DashboardApp() {
     const now = Date.now();
     setMerchantOtpSession({
       sessionToken: challenge.sessionToken,
-      expiresAt: now + Number(challenge.expiresInSeconds || 120) * 1000,
+      expiresAt: now + Number(challenge.expiresInSeconds || OTP_EXPIRY_FALLBACK_SECONDS) * 1000,
     });
     setMerchantOtpNow(now);
     setMerchantOtpCode('');
@@ -1356,7 +1359,7 @@ export default function DashboardApp() {
                 </div>
 
                 <div className="text-center text-sm font-medium text-muted-foreground">
-                  Code expires in {formatDuration(otpSecondsRemaining)}
+                  {t('codeExpiresIn').replace('{time}', formatDuration(otpSecondsRemaining))}
                 </div>
 
                 {otpError ? (
@@ -2597,6 +2600,7 @@ function KitchenView({
   );
   const cards = useMemo(() => groupKitchenCards(filteredItems, statusMap), [filteredItems, statusMap]);
   const updatingItemIdSet = useMemo(() => new Set(updatingItemIds), [updatingItemIds]);
+  const acceptModeHint = autoAccept ? t('autoAcceptKitchenHint') : t('manualKitchenHint');
   useEffect(() => {
     if (!autoAccept) return;
     const pendingIds = flattenKitchenItems(items)
@@ -2610,30 +2614,41 @@ function KitchenView({
 
   return (
     <div className="space-y-4">
-<div className="flex flex-wrap items-center justify-between gap-3">
-  <div>
-    <h2 className="text-xl font-semibold">{t('kitchen')}</h2>
-    <p className="text-sm text-muted-foreground">{t('kitchenPaidItems')}</p>
-  </div>
-  <div className="flex items-center gap-3">
-    <Badge tone="primary">{cards.length}</Badge>
-    <HeroSwitch
-      aria-label={autoAccept ? t('autoAcceptOn') : t('manualMode')}
-      classNames={{
-        base: 'h-9 rounded-md border border-border bg-card px-3',
-        wrapper: 'mr-2 h-[18px] w-8 bg-[var(--color-border-secondary)] group-data-[selected=true]:bg-[#0f8a7f]',
-        thumb: 'h-3.5 w-3.5 bg-white',
-        label: 'text-sm font-medium text-foreground',
-      }}
-      color="success"
-      isSelected={autoAccept}
-      onValueChange={setAutoAccept}
-      size="sm"
-    >
-      {autoAccept ? t('autoAcceptOn') : t('manualMode')}
-    </HeroSwitch>
-  </div>
-</div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold">{t('kitchen')}</h2>
+          <p className="text-sm text-muted-foreground">{t('kitchenPaidItems')}</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Badge tone="primary">{cards.length}</Badge>
+          <div className="flex min-w-[13rem] flex-col gap-1">
+            <Label className="text-xs text-muted-foreground" htmlFor="kitchen-auto-accept-switch">
+              {t('kitchenAcceptMode')}
+            </Label>
+            <HeroSwitch
+              id="kitchen-auto-accept-switch"
+              aria-label={t('kitchenAcceptMode')}
+              aria-describedby="kitchen-auto-accept-hint"
+              classNames={{
+                base: 'h-9 w-fit rounded-md border border-border bg-card px-3',
+                wrapper:
+                  'mr-2 h-[18px] w-8 bg-[var(--color-border-secondary)] group-data-[selected=true]:bg-[#0f8a7f]',
+                thumb: 'h-3.5 w-3.5 bg-white',
+                label: 'text-sm font-medium text-foreground',
+              }}
+              color="success"
+              isSelected={autoAccept}
+              onValueChange={setAutoAccept}
+              size="sm"
+            >
+              {autoAccept ? t('autoAcceptOn') : t('manualMode')}
+            </HeroSwitch>
+            <span id="kitchen-auto-accept-hint" className="text-xs text-muted-foreground">
+              {acceptModeHint}
+            </span>
+          </div>
+        </div>
+      </div>
       <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
         <Input
           type="date"
@@ -5022,15 +5037,26 @@ function PaidRevenueLineChart({ rows = [] }) {
         <Badge tone="primary">{usd(totalPaid)}</Badge>
       </CardHeader>
       <CardContent>
-        <AnalyticsLineChart
-          data={points}
-          xKey="day"
-          yKey="paidUsd"
-          label={t('paidRevenueByDay')}
-          color="hsl(var(--primary))"
-        />
+        <Suspense fallback={<ChartLoading label={t('loadingAnalytics')} />}>
+          <AnalyticsLineChart
+            data={points}
+            xKey="day"
+            yKey="paidUsd"
+            label={t('paidRevenueByDay')}
+            color="hsl(var(--primary))"
+          />
+        </Suspense>
       </CardContent>
     </Card>
+  );
+}
+
+function ChartLoading({ label }) {
+  return (
+    <div className="flex h-80 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+      <span className="h-6 w-6 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
+      <span>{label}</span>
+    </div>
   );
 }
 
@@ -5352,14 +5378,4 @@ function downloadSvg(tableId, filename) {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
-}
-
-function displayImageUrl(url) {
-  if (!url) return '/logo.png';
-  return String(url).replace(/^http:\/\/minio:9000/i, 'http://localhost:9000');
-}
-
-function replaceBrokenImage(event) {
-  if (event.currentTarget.src.endsWith('/logo.png')) return;
-  event.currentTarget.src = '/logo.png';
 }

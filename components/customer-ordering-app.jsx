@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input, Select, Textarea } from '@/components/ui/input';
 import { API_BASE, api } from '@/lib/api';
 import { GOEY_TOAST_CLASS_NAMES, goeyToastOptions } from '@/lib/goey-toast-options';
+import { displayImageUrl, replaceBrokenImage } from '@/lib/image-url';
 import { useBodyScrollLock } from '@/lib/use-body-scroll-lock';
 import { cn, displayUsd, khr, tags, usd } from '@/lib/utils';
 import { gooeyToast } from 'goey-toast';
@@ -2610,14 +2611,4 @@ async function saveImageToPhonePhotos(blob, filename) {
 function formatDuration(seconds) {
   const s = Math.max(0, Number(seconds) || 0);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
-
-function displayImageUrl(url) {
-  if (!url) return '/logo.png';
-  return String(url).replace(/^http:\/\/minio:9000/i, 'http://localhost:9000');
-}
-
-function replaceBrokenImage(event) {
-  if (event.currentTarget.src.endsWith('/logo.png')) return;
-  event.currentTarget.src = '/logo.png';
 }
