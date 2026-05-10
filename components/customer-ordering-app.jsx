@@ -49,7 +49,7 @@ const KHQR_LOGO_WHITE_SRC = '/khqr/khqr-logo.svg';
 export default function CustomerOrderingApp({ tableNumber }) {
   const { t } = useLanguage();
   const [table, setTable] = useState(null);
-  const [menu, setMenu] = useState({ categories: [], items: [], addons: [], options: [], spiceLevels: [] });
+  const [menu, setMenu] = useState({ categories: [], items: [], addons: [], options: [], sizeLevels: [] });
   const [categoryId, setCategoryId] = useState('');
   const [priceFilter, setPriceFilter] = useState('all');
   const [query, setQuery] = useState('');
@@ -362,9 +362,9 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
   const groupedAddons = useMemo(() => groupBy(menu.addons, 'menuItemId'), [menu.addons]);
   const groupedOptions = useMemo(() => groupBy(menu.options, 'menuItemId'), [menu.options]);
-  const groupedSpiceLevels = useMemo(
-    () => groupBy(menu.spiceLevels || [], 'menuItemId'),
-    [menu.spiceLevels]
+  const groupedSizeLevels = useMemo(
+    () => groupBy(menu.sizeLevels || [], 'menuItemId'),
+    [menu.sizeLevels]
   );
 
   const totals = useMemo(() => {
@@ -537,8 +537,8 @@ export default function CustomerOrderingApp({ tableNumber }) {
         items: cart.map((item) => ({
           menuItemId: item.id,
           quantity: item.quantity,
-          selectedSpiceLevelId: item.selectedSpiceLevelId || null,
-          spiceLevel: item.spiceLevel,
+          selectedSizeLevelId: item.selectedSizeLevelId || null,
+          sizeLevel: item.sizeLevel,
           optionIds: item.optionIds || [],
           addons: item.addons.map((addon) => ({ addonId: addon.id, quantity: addon.quantity })),
           specialInstructions: item.specialInstructions,
@@ -1214,7 +1214,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
         <CustomizeItem
           item={activeItem}
           addons={activeItem.addons || groupedAddons[activeItem.id] || []}
-          spiceLevels={activeItem.spiceLevels || groupedSpiceLevels[activeItem.id] || []}
+          sizeLevels={activeItem.sizeLevels || groupedSizeLevels[activeItem.id] || []}
           options={groupedOptions[activeItem.id] || []}
           onClose={() => setActiveItem(null)}
           onAdd={addConfiguredItem}
@@ -1348,11 +1348,11 @@ function CartLineItem({ item, onDecrease, onIncrease, onRemove, controlSize = 's
       </button>
       <div className="min-w-0 flex-1">
         <h3 className="line-clamp-2 text-base font-bold leading-snug">{item.name}</h3>
-        {orderItemSpiceLabel(item) || item.addons?.length ? (
+        {orderItemSizeLabel(item) || item.addons?.length ? (
           <div className="mt-1 space-y-0.5">
-            {orderItemSpiceLabel(item) ? (
+            {orderItemSizeLabel(item) ? (
               <p className="text-xs text-muted-foreground">
-                {t('spice')}: {orderItemSpiceLabel(item)}
+                {t('size')}: {orderItemSizeLabel(item)}
               </p>
             ) : null}
             {(item.addons || []).map((addon, index) => (
@@ -1412,11 +1412,11 @@ function OrderDetailMiniItems({ order }) {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-bold leading-tight">{item.name || item.itemName}</p>
             <p className="text-xs text-muted-foreground">x{item.quantity}</p>
-            {orderItemSpiceLabel(item) || item.addons?.length ? (
+            {orderItemSizeLabel(item) || item.addons?.length ? (
               <div className="mt-1 space-y-0.5">
-                {orderItemSpiceLabel(item) ? (
+                {orderItemSizeLabel(item) ? (
                   <p className="text-xs text-muted-foreground">
-                    {t('spice')}: {orderItemSpiceLabel(item)}
+                    {t('size')}: {orderItemSizeLabel(item)}
                   </p>
                 ) : null}
                 {(item.addons || []).map((addon, addonIndex) => (
@@ -1975,31 +1975,31 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
 }
 
 /* ── CustomizeItem ────────────────────────────────────────── */
-function CustomizeItem({ item, addons, spiceLevels = [], options, onClose, onAdd }) {
+function CustomizeItem({ item, addons, sizeLevels = [], options, onClose, onAdd }) {
   const { t } = useLanguage();
-  const availableSpiceLevels = useMemo(
+  const availableSizeLevels = useMemo(
     () =>
-      (spiceLevels.length
-        ? spiceLevels
+      (sizeLevels.length
+        ? sizeLevels
         : options
-            .filter((option) => option.optionGroup === 'Spice')
+            .filter((option) => option.optionGroup === 'Size')
             .map((option) => ({
               ...option,
               name: option.optionName,
-            }))).map((spice) => ({
-        ...spice,
-        name: spice.name || spice.optionName || '',
+            }))).map((size) => ({
+        ...size,
+        name: size.name || size.optionName || '',
       })),
-    [options, spiceLevels]
+    [options, sizeLevels]
   );
-  const hasSpiceLevels = availableSpiceLevels.length > 0;
+  const hasSizeLevels = availableSizeLevels.length > 0;
   const hasAddons = addons.length > 0;
-  const defaultSpiceLevel = useMemo(
+  const defaultSizeLevel = useMemo(
     () =>
-      availableSpiceLevels.find((spice) => isDefault(spice)) ||
-      availableSpiceLevels.find((spice) => spiceLevelLabel(spice).toUpperCase() === 'NORMAL') ||
+      availableSizeLevels.find((size) => isDefault(size)) ||
+      availableSizeLevels.find((size) => sizeLevelLabel(size).toUpperCase() === 'NORMAL') ||
       null,
-    [availableSpiceLevels]
+    [availableSizeLevels]
   );
   const defaultAddons = useMemo(
     () =>
@@ -2010,23 +2010,23 @@ function CustomizeItem({ item, addons, spiceLevels = [], options, onClose, onAdd
   );
 
   const [quantity, setQuantity] = useState(1);
-  const [selectedSpiceLevel, setSelectedSpiceLevel] = useState(defaultSpiceLevel);
+  const [selectedSizeLevel, setSelectedSizeLevel] = useState(defaultSizeLevel);
   const [selectedAddons, setSelectedAddons] = useState(defaultAddons);
   const [specialInstructions, setSpecialInstructions] = useState('');
   const [showFullDescription, setShowFullDescription] = useState(false);
   const [showFullImage, setShowFullImage] = useState(false);
 
-  const spiceRequired =
-    Boolean(item.isSpiceRequired) || availableSpiceLevels.some((spice) => Boolean(spice.required));
-  const unitUsd = Number(item.priceUsd || 0) + Number(selectedSpiceLevel?.priceUsd || 0);
+  const sizeRequired =
+    Boolean(item.isSizeRequired) || availableSizeLevels.some((size) => Boolean(size.required));
+  const unitUsd = Number(item.priceUsd || 0) + Number(selectedSizeLevel?.priceUsd || 0);
   const addonTotalUsd = selectedAddons.reduce(
     (sum, addon) => sum + Number(addon.priceUsd || 0) * Number(addon.quantity || 1),
     0
   );
   const lineUsd = unitUsd * quantity + addonTotalUsd * quantity;
-  const selectedOptionIds = selectedSpiceLevel?.optionGroup === 'Spice' ? [selectedSpiceLevel.id] : [];
-  const spiceName = selectedSpiceLevel ? spiceLevelLabel(selectedSpiceLevel) : '';
-  const addDisabled = spiceRequired && hasSpiceLevels && !selectedSpiceLevel;
+  const selectedOptionIds = selectedSizeLevel?.optionGroup === 'Size' ? [selectedSizeLevel.id] : [];
+  const sizeName = selectedSizeLevel ? sizeLevelLabel(selectedSizeLevel) : '';
+  const addDisabled = sizeRequired && hasSizeLevels && !selectedSizeLevel;
   const productDescription = item.description?.trim();
 
   function addItemToCart() {
@@ -2034,10 +2034,10 @@ function CustomizeItem({ item, addons, spiceLevels = [], options, onClose, onAdd
     onAdd({
       ...item,
       quantity,
-      selectedSpiceLevelId: selectedSpiceLevel?.optionGroup === 'Spice' ? null : selectedSpiceLevel?.id || null,
-      spiceLevelName: spiceName || 'Normal',
-      spiceLevelPriceUsd: Number(selectedSpiceLevel?.priceUsd || 0),
-      spiceLevel: spiceName ? spiceName.toUpperCase() : 'NORMAL',
+      selectedSizeLevelId: selectedSizeLevel?.optionGroup === 'Size' ? null : selectedSizeLevel?.id || null,
+      sizeLevelName: sizeName || 'Normal',
+      sizeLevelPriceUsd: Number(selectedSizeLevel?.priceUsd || 0),
+      sizeLevel: sizeName ? sizeName.toUpperCase() : 'NORMAL',
       optionIds: selectedOptionIds,
       addons: selectedAddons,
       unitUsd,
@@ -2165,30 +2165,30 @@ function CustomizeItem({ item, addons, spiceLevels = [], options, onClose, onAdd
             </div>
           ) : null}
 
-          {hasSpiceLevels ? (
+          {hasSizeLevels ? (
             <div>
-              <h3 className="mb-3 text-base font-bold">{t('chooseSpiceLevel')}</h3>
+              <h3 className="mb-3 text-base font-bold">{t('chooseSizeLevel')}</h3>
               <div className="grid gap-2">
-                {availableSpiceLevels.map((spice) => (
+                {availableSizeLevels.map((size) => (
                   <label
-                    key={spice.id}
+                    key={size.id}
                     className={cn(
                       'flex cursor-pointer items-center justify-between rounded-xl border-2 p-3 transition-colors',
-                      selectedSpiceLevel?.id === spice.id
+                      selectedSizeLevel?.id === size.id
                         ? 'border-[#0f8a7f] bg-[#0f8a7f]/10'
                         : 'border-border hover:border-border/80 hover:bg-muted/40'
                     )}
                   >
-                    <span className="text-sm font-semibold">{spiceLevelLabel(spice)}</span>
+                    <span className="text-sm font-semibold">{sizeLevelLabel(size)}</span>
                     <span className="flex items-center gap-3">
                       <span className="text-xs text-muted-foreground">
-                        {formatModifierPrice(spice.priceUsd, t)}
+                        {formatModifierPrice(size.priceUsd, t)}
                       </span>
                       <input
                         type="radio"
-                        name="spice"
-                        checked={selectedSpiceLevel?.id === spice.id}
-                        onChange={() => setSelectedSpiceLevel(spice)}
+                        name="size"
+                        checked={selectedSizeLevel?.id === size.id}
+                        onChange={() => setSelectedSizeLevel(size)}
                         className="sr-only"
                       />
                     </span>
@@ -2418,16 +2418,16 @@ function selectedAddonPayload(addon) {
   };
 }
 
-function orderItemSpiceLabel(item) {
-  const spiceLevel = String(item?.spiceLevel || '').trim();
-  const spiceLabel = String(item?.spiceLevelName || spiceLevel).trim();
-  if (!spiceLabel) return '';
-  if (spiceLevel.toUpperCase() === 'NORMAL' || spiceLabel.toUpperCase() === 'NORMAL') return '';
-  return spiceLabel;
+function orderItemSizeLabel(item) {
+  const sizeLevel = String(item?.sizeLevel || '').trim();
+  const sizeLabel = String(item?.sizeLevelName || sizeLevel).trim();
+  if (!sizeLabel) return '';
+  if (sizeLevel.toUpperCase() === 'NORMAL' || sizeLabel.toUpperCase() === 'NORMAL') return '';
+  return sizeLabel;
 }
 
-function spiceLevelLabel(spice) {
-  return spice?.name || spice?.optionName || '';
+function sizeLevelLabel(size) {
+  return size?.name || size?.optionName || '';
 }
 
 function formatModifierPrice(value, t) {

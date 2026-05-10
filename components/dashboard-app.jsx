@@ -2455,8 +2455,8 @@ function OrderDetailContent({
           <div key={item.id} className="rounded-md border border-border p-3 text-sm">
             {(() => {
               const itemStatus = kitchenItemStatus[item.id] || item.kitchenStatus || 'PENDING';
-              const spiceLabel = orderItemSpiceLabel(item);
-              const spiceTotalUsd = orderItemSpiceTotalUsd(item);
+              const sizeLabel = orderItemSizeLabel(item);
+              const sizeTotalUsd = orderItemSizeTotalUsd(item);
               return (
                 <div className="flex gap-3">
                   {item.imageUrl ? (
@@ -2497,15 +2497,15 @@ function OrderDetailContent({
                     </div>
                   ) : null}
                 </div>
-                {spiceLabel || item.specialInstructions || item.addons?.length ? (
+                {sizeLabel || item.specialInstructions || item.addons?.length ? (
                   <div className="mt-2 space-y-1 text-xs">
-                    {spiceLabel ? (
+                    {sizeLabel ? (
                       <div className="flex justify-between gap-3 text-muted-foreground">
                         <span className="min-w-0">
-                          {t('spice')}: {spiceLabel}
+                          {t('size')}: {sizeLabel}
                         </span>
-                        {spiceTotalUsd > 0 ? (
-                          <span className="shrink-0">{displayUsd(spiceTotalUsd)}</span>
+                        {sizeTotalUsd > 0 ? (
+                          <span className="shrink-0">{displayUsd(sizeTotalUsd)}</span>
                         ) : null}
                       </div>
                     ) : null}
@@ -2752,9 +2752,9 @@ function KitchenItemCard({ item, now, onGroupStatus, onItemStatus, updatingItemI
         <div className="space-y-2 text-sm">
           {item.rows.map((row) => {
             const addonText = formatKitchenAddons(row.addons);
-            const spiceLabel = orderItemSpiceLabel(row);
+            const sizeLabel = orderItemSizeLabel(row);
             const modifierText = [
-              spiceLabel ? `${t('spice')}: ${spiceLabel}` : '',
+              sizeLabel ? `${t('size')}: ${sizeLabel}` : '',
               addonText ? `${t('addons')}: ${addonText}` : '',
             ]
               .filter(Boolean)
@@ -2849,11 +2849,11 @@ const DEFAULT_ADDONS = [
   { name: 'Extra Sauce', priceUsd: '0.50', hasQuantity: false, isDefault: true },
 ];
 
-const DEFAULT_SPICE_LEVELS = [
+const DEFAULT_SIZE_LEVELS = [
   { name: 'Normal', priceUsd: '0.00', isDefault: true },
   { name: 'Medium', priceUsd: '0.00', isDefault: false },
-  { name: 'Hot', priceUsd: '0.25', isDefault: false },
-  { name: 'Extra Hot', priceUsd: '0.50', isDefault: false },
+  { name: 'Large', priceUsd: '0.25', isDefault: false },
+  { name: 'Extra Large', priceUsd: '0.50', isDefault: false },
 ];
 
 function createMenuForm() {
@@ -2866,10 +2866,10 @@ function createMenuForm() {
     imageUrl: '',
     available: true,
     sortOrder: 100,
-    spice: '',
+    size: '',
     addOns: '',
-    isSpiceRequired: false,
-    spiceLevels: DEFAULT_SPICE_LEVELS.map(normalizeSpiceFormEntry),
+    isSizeRequired: false,
+    sizeLevels: DEFAULT_SIZE_LEVELS.map(normalizeSizeFormEntry),
     addons: DEFAULT_ADDONS.map(normalizeAddonFormEntry),
   };
 }
@@ -2893,7 +2893,7 @@ function slugifyCategoryName(value) {
     .replace(/^-+|-+$/g, '');
 }
 
-function normalizeSpiceFormEntry(entry = {}) {
+function normalizeSizeFormEntry(entry = {}) {
   return {
     name: entry.name || entry.optionName || '',
     priceUsd: String(entry.priceUsd ?? entry.price ?? '0.00'),
@@ -2914,24 +2914,24 @@ function menuFormBoolean(value) {
   return value === true || value === 'true';
 }
 
-function compactSpiceLevels(spiceLevels = []) {
-  const rows = spiceLevels
-    .map((spice) => ({
-      name: String(spice.name || '').trim(),
-      priceUsd: Number(spice.priceUsd || 0),
-      isDefault: Boolean(spice.isDefault),
+function compactSizeLevels(sizeLevels = []) {
+  const rows = sizeLevels
+    .map((size) => ({
+      name: String(size.name || '').trim(),
+      priceUsd: Number(size.priceUsd || 0),
+      isDefault: Boolean(size.isDefault),
     }))
-    .filter((spice) => spice.name);
+    .filter((size) => size.name);
 
-  if (rows.length > 0 && !rows.some((spice) => spice.isDefault)) {
+  if (rows.length > 0 && !rows.some((size) => size.isDefault)) {
     rows[0].isDefault = true;
   }
 
   let defaultAssigned = false;
-  return rows.map((spice) => {
-    const isDefault = spice.isDefault && !defaultAssigned;
+  return rows.map((size) => {
+    const isDefault = size.isDefault && !defaultAssigned;
     defaultAssigned = defaultAssigned || isDefault;
-    return { ...spice, isDefault };
+    return { ...size, isDefault };
   });
 }
 
@@ -2953,8 +2953,8 @@ function menuItemPayload(form) {
     priceKhr: null,
     available: Boolean(form.available),
     sortOrder: Number(form.sortOrder || 0),
-    isSpiceRequired: Boolean(form.isSpiceRequired),
-    spiceLevels: compactSpiceLevels(form.spiceLevels),
+    isSizeRequired: Boolean(form.isSizeRequired),
+    sizeLevels: compactSizeLevels(form.sizeLevels),
     addons: compactAddons(form.addons),
   };
 }
@@ -2972,9 +2972,9 @@ function MenuView({ menu, request, reload }) {
   const [menuFormOpen, setMenuFormOpen] = useState(false);
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [categorySlugEdited, setCategorySlugEdited] = useState(false);
-  const [spiceOpen, setSpiceOpen] = useState(true);
+  const [sizeOpen, setSizeOpen] = useState(true);
   const [addonsOpen, setAddonsOpen] = useState(true);
-  const [spiceDraft, setSpiceDraft] = useState({ name: '', priceUsd: '' });
+  const [sizeDraft, setSizeDraft] = useState({ name: '', priceUsd: '' });
   const [addonDraft, setAddonDraft] = useState({
     name: '',
     priceUsd: '',
@@ -3011,9 +3011,9 @@ function MenuView({ menu, request, reload }) {
     setEditingItem(null);
     setForm(createMenuForm());
     setMessage(nextMessage);
-    setSpiceDraft({ name: '', priceUsd: '' });
+    setSizeDraft({ name: '', priceUsd: '' });
     setAddonDraft({ name: '', priceUsd: '', hasQuantity: false });
-    setSpiceOpen(true);
+    setSizeOpen(true);
     setAddonsOpen(true);
     setMenuFormOpen(false);
   }
@@ -3023,9 +3023,9 @@ function MenuView({ menu, request, reload }) {
     setCategoryManagerOpen(false);
     setForm(createMenuForm());
     setMessage('');
-    setSpiceDraft({ name: '', priceUsd: '' });
+    setSizeDraft({ name: '', priceUsd: '' });
     setAddonDraft({ name: '', priceUsd: '', hasQuantity: false });
-    setSpiceOpen(true);
+    setSizeOpen(true);
     setAddonsOpen(true);
     setMenuFormOpen(true);
   }
@@ -3129,13 +3129,13 @@ function MenuView({ menu, request, reload }) {
   }
 
   function editItem(item) {
-    const itemSpiceLevels =
-      Array.isArray(item.spiceLevels) && item.spiceLevels.length
-        ? item.spiceLevels
-        : (menu.spiceLevels || menu.options || []).filter(
+    const itemSizeLevels =
+      Array.isArray(item.sizeLevels) && item.sizeLevels.length
+        ? item.sizeLevels
+        : (menu.sizeLevels || menu.options || []).filter(
             (option) =>
               option.menuItemId === item.id &&
-              (option.optionGroup == null || option.optionGroup === 'Spice')
+              (option.optionGroup == null || option.optionGroup === 'Size')
           );
     const itemAddons =
       Array.isArray(item.addons) && item.addons.length
@@ -3153,16 +3153,16 @@ function MenuView({ menu, request, reload }) {
       imageUrl: item.imageUrl || '',
       available: item.available,
       sortOrder: item.sortOrder ?? 100,
-      spice: item.spice || '',
+      size: item.size || '',
       addOns: item.addOns || '',
-      isSpiceRequired:
-        Boolean(item.isSpiceRequired) || itemSpiceLevels.some((spice) => Boolean(spice.required)),
-      spiceLevels: itemSpiceLevels.map(normalizeSpiceFormEntry),
+      isSizeRequired:
+        Boolean(item.isSizeRequired) || itemSizeLevels.some((size) => Boolean(size.required)),
+      sizeLevels: itemSizeLevels.map(normalizeSizeFormEntry),
       addons: itemAddons.map(normalizeAddonFormEntry),
     });
-    setSpiceDraft({ name: '', priceUsd: '' });
+    setSizeDraft({ name: '', priceUsd: '' });
     setAddonDraft({ name: '', priceUsd: '', hasQuantity: false });
-    setSpiceOpen(true);
+    setSizeOpen(true);
     setAddonsOpen(true);
     setMenuFormOpen(true);
   }
@@ -3232,7 +3232,7 @@ function MenuView({ menu, request, reload }) {
         imageUrl: item.imageUrl,
         available: !item.available,
         dietaryTags: item.dietaryTags,
-        isSpiceRequired: item.isSpiceRequired,
+        isSizeRequired: item.isSizeRequired,
         sortOrder: item.sortOrder || 0,
       }),
     });
@@ -3244,49 +3244,49 @@ function MenuView({ menu, request, reload }) {
     setForm({ ...form, dietaryTags: next.join(', ') });
   }
 
-  function addSpiceLevel() {
-    const name = spiceDraft.name.trim();
+  function addSizeLevel() {
+    const name = sizeDraft.name.trim();
     if (!name) return;
     setForm((current) => ({
       ...current,
-      spiceLevels: [
-        ...current.spiceLevels,
+      sizeLevels: [
+        ...current.sizeLevels,
         {
           name,
-          priceUsd: spiceDraft.priceUsd || '0.00',
-          isDefault: current.spiceLevels.length === 0,
+          priceUsd: sizeDraft.priceUsd || '0.00',
+          isDefault: current.sizeLevels.length === 0,
         },
       ],
     }));
-    setSpiceDraft({ name: '', priceUsd: '' });
+    setSizeDraft({ name: '', priceUsd: '' });
   }
 
-  function updateSpiceLevel(index, patch) {
+  function updateSizeLevel(index, patch) {
     setForm((current) => ({
       ...current,
-      spiceLevels: current.spiceLevels.map((spice, spiceIndex) =>
-        spiceIndex === index ? { ...spice, ...patch } : spice
+      sizeLevels: current.sizeLevels.map((size, sizeIndex) =>
+        sizeIndex === index ? { ...size, ...patch } : size
       ),
     }));
   }
 
-  function setDefaultSpice(index) {
+  function setDefaultSize(index) {
     setForm((current) => ({
       ...current,
-      spiceLevels: current.spiceLevels.map((spice, spiceIndex) => ({
-        ...spice,
-        isDefault: spiceIndex === index,
+      sizeLevels: current.sizeLevels.map((size, sizeIndex) => ({
+        ...size,
+        isDefault: sizeIndex === index,
       })),
     }));
   }
 
-  function deleteSpiceLevel(index) {
+  function deleteSizeLevel(index) {
     setForm((current) => {
-      const next = current.spiceLevels.filter((_, spiceIndex) => spiceIndex !== index);
-      if (next.length > 0 && !next.some((spice) => spice.isDefault)) {
+      const next = current.sizeLevels.filter((_, sizeIndex) => sizeIndex !== index);
+      if (next.length > 0 && !next.some((size) => size.isDefault)) {
         next[0] = { ...next[0], isDefault: true };
       }
-      return { ...current, spiceLevels: next };
+      return { ...current, sizeLevels: next };
     });
   }
 
@@ -3554,72 +3554,72 @@ function MenuView({ menu, request, reload }) {
               <button
                 type="button"
                 className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
-                onClick={() => setSpiceOpen((open) => !open)}
+                onClick={() => setSizeOpen((open) => !open)}
               >
-                <span className="text-sm font-semibold">{t('spiceLevels')}</span>
-                {spiceOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                <span className="text-sm font-semibold">{t('sizeLevels')}</span>
+                {sizeOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
               </button>
-              {spiceOpen ? (
+              {sizeOpen ? (
                 <div className="space-y-3 border-t border-border/70 p-3">
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-xs font-medium text-muted-foreground">{t('required')}</span>
                     <ToggleSwitch
-                      checked={form.isSpiceRequired}
-                      onChange={(checked) => setForm({ ...form, isSpiceRequired: checked })}
+                      checked={form.isSizeRequired}
+                      onChange={(checked) => setForm({ ...form, isSizeRequired: checked })}
                     />
                   </div>
                   <div className="grid grid-cols-[1fr_86px_auto] gap-2">
                     <Input
-                      value={spiceDraft.name}
-                      onChange={(e) => setSpiceDraft({ ...spiceDraft, name: e.target.value })}
+                      value={sizeDraft.name}
+                      onChange={(e) => setSizeDraft({ ...sizeDraft, name: e.target.value })}
                       placeholder={t('name')}
                     />
                     <Input
-                      value={spiceDraft.priceUsd}
-                      onChange={(e) => setSpiceDraft({ ...spiceDraft, priceUsd: e.target.value })}
+                      value={sizeDraft.priceUsd}
+                      onChange={(e) => setSizeDraft({ ...sizeDraft, priceUsd: e.target.value })}
                       placeholder="USD"
                       type="number"
                       step="0.01"
                       min="0"
                     />
-                    <Button type="button" className="px-3" onClick={addSpiceLevel}>
+                    <Button type="button" className="px-3" onClick={addSizeLevel}>
                       <Plus className="h-4 w-4" />
                       {t('add')}
                     </Button>
                   </div>
                   <div className="space-y-2">
-                    {form.spiceLevels.length === 0 ? (
+                    {form.sizeLevels.length === 0 ? (
                       <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
-                        {t('noSpiceLevelsYet')}
+                        {t('noSizeLevelsYet')}
                       </p>
                     ) : (
-                      form.spiceLevels.map((spice, index) => (
-                        <div key={`${spice.name}-${index}`} className="grid grid-cols-[1fr_82px_36px_32px] items-center gap-2">
+                      form.sizeLevels.map((size, index) => (
+                        <div key={`${size.name}-${index}`} className="grid grid-cols-[1fr_82px_36px_32px] items-center gap-2">
                           <Input
-                            value={spice.name}
-                            onChange={(e) => updateSpiceLevel(index, { name: e.target.value })}
+                            value={size.name}
+                            onChange={(e) => updateSizeLevel(index, { name: e.target.value })}
                             placeholder={t('name')}
                           />
                           <Input
-                            value={spice.priceUsd}
-                            onChange={(e) => updateSpiceLevel(index, { priceUsd: e.target.value })}
+                            value={size.priceUsd}
+                            onChange={(e) => updateSizeLevel(index, { priceUsd: e.target.value })}
                             type="number"
                             step="0.01"
                             min="0"
-                            aria-label={t('spiceLevels')}
+                            aria-label={t('sizeLevels')}
                           />
                           <input
                             type="radio"
-                            name="default-spice"
-                            checked={spice.isDefault}
-                            onChange={() => setDefaultSpice(index)}
+                            name="default-size"
+                            checked={size.isDefault}
+                            onChange={() => setDefaultSize(index)}
                             aria-label={t('defaultLabel')}
                           />
                           <Button
                             type="button"
                             variant="ghost"
                             size="icon"
-                            onClick={() => deleteSpiceLevel(index)}
+                            onClick={() => deleteSizeLevel(index)}
                             aria-label={t('deleteOrder')}
                           >
                             <X className="h-4 w-4" />
@@ -4855,16 +4855,16 @@ function formatKitchenAddons(addons = []) {
     .join(', ');
 }
 
-function orderItemSpiceLabel(item) {
-  const spiceLevel = String(item?.spiceLevel || '').trim();
-  const spiceLabel = String(item?.spiceLevelName || spiceLevel).trim();
-  if (!spiceLabel) return '';
-  if (spiceLevel.toUpperCase() === 'NORMAL' || spiceLabel.toUpperCase() === 'NORMAL') return '';
-  return spiceLabel;
+function orderItemSizeLabel(item) {
+  const sizeLevel = String(item?.sizeLevel || '').trim();
+  const sizeLabel = String(item?.sizeLevelName || sizeLevel).trim();
+  if (!sizeLabel) return '';
+  if (sizeLevel.toUpperCase() === 'NORMAL' || sizeLabel.toUpperCase() === 'NORMAL') return '';
+  return sizeLabel;
 }
 
-function orderItemSpiceTotalUsd(item) {
-  const unitPriceUsd = Number(item?.spiceLevelPriceUsd || 0);
+function orderItemSizeTotalUsd(item) {
+  const unitPriceUsd = Number(item?.sizeLevelPriceUsd || 0);
   const quantity = Math.max(1, Number(item?.quantity || 1));
   return unitPriceUsd * quantity;
 }

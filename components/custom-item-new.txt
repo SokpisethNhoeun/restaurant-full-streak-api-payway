@@ -2,15 +2,15 @@
 function CustomizeItem({ item, addons, options, onClose, onAdd }) {
   const { t } = useLanguage();
   const [quantity, setQuantity] = useState(1);
-  const [spiceLevel, setSpiceLevel] = useState('NORMAL');
+  const [sizeLevel, setSizeLevel] = useState('NORMAL');
   const [selectedOptions, setSelectedOptions] = useState([]);
   const [selectedAddons, setSelectedAddons] = useState([]);
   const [specialInstructions, setSpecialInstructions] = useState('');
   const [currentStep, setCurrentStep] = useState(1);
 
   const optionGroups = groupBy(options, 'optionGroup');
-  const spiceOptions = optionGroups['Spice'] || [];
-  const hasSpiceOptions = spiceOptions.length > 0;
+  const sizeOptions = optionGroups['Size'] || [];
+  const hasSizeOptions = sizeOptions.length > 0;
 
   const unitUsd =
     Number(item.priceUsd || 0) +
@@ -29,16 +29,16 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
     );
   }
 
-  function chooseSpice(option) {
+  function chooseSize(option) {
     setSelectedOptions((curr) => [
-      ...curr.filter((e) => e.optionGroup !== 'Spice'),
+      ...curr.filter((e) => e.optionGroup !== 'Size'),
       option,
     ]);
-    setSpiceLevel(option.optionName.toUpperCase());
+    setSizeLevel(option.optionName.toUpperCase());
   }
 
   function nextStep() {
-    if (currentStep === 1 && hasSpiceOptions) {
+    if (currentStep === 1 && hasSizeOptions) {
       setCurrentStep(2);
     }
   }
@@ -77,22 +77,22 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
         </div>
 
         {/* Step indicator */}
-        {hasSpiceOptions && addons.length > 0 && (
+        {hasSizeOptions && addons.length > 0 && (
           <div className="border-b border-border/60 px-4 py-3 text-center text-xs font-semibold text-muted-foreground">
-            <span className={currentStep === 1 ? 'text-primary' : ''}>1 · Spice</span>
+            <span className={currentStep === 1 ? 'text-primary' : ''}>1 · Size</span>
             <span className="mx-2">→</span>
             <span className={currentStep === 2 ? 'text-primary' : ''}>2 · Add-ons</span>
           </div>
         )}
 
         <div className="space-y-5 p-4">
-          {/* STEP 1: Spice Level Selection */}
-          {currentStep === 1 && hasSpiceOptions && (
+          {/* STEP 1: Size Level Selection */}
+          {currentStep === 1 && hasSizeOptions && (
             <>
               <div>
-                <h3 className="mb-3 text-base font-bold">Choose Spice Level</h3>
+                <h3 className="mb-3 text-base font-bold">Choose Size Level</h3>
                 <div className="grid gap-2">
-                  {spiceOptions.map((option) => (
+                  {sizeOptions.map((option) => (
                     <label
                       key={option.id}
                       className={cn(
@@ -113,9 +113,9 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
                         )}
                         <input
                           type="radio"
-                          name="spice"
+                          name="size"
                           checked={selectedOptions.some((e) => e.id === option.id)}
-                          onChange={() => chooseSpice(option)}
+                          onChange={() => chooseSize(option)}
                           className="sr-only"
                         />
                       </span>
@@ -287,8 +287,8 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
             </>
           )}
 
-          {/* If no spice but has addons, show step 2 directly */}
-          {currentStep === 2 && !hasSpiceOptions && (
+          {/* If no size but has addons, show step 2 directly */}
+          {currentStep === 2 && !hasSizeOptions && (
             <>
               <div>
                 <h3 className="mb-3 text-base font-bold">Add Extras</h3>
@@ -423,8 +423,8 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
             </>
           )}
 
-          {/* If no spice and no addons show step 1 */}
-          {currentStep === 1 && !hasSpiceOptions && (
+          {/* If no size and no addons show step 1 */}
+          {currentStep === 1 && !hasSizeOptions && (
             <>
               <div>
                 <h3 className="mb-3 text-base font-bold">Add Extras</h3>
@@ -562,7 +562,7 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
 
         {/* Footer actions */}
         <div className="flex gap-2.5 border-t border-border/60 p-4">
-          {currentStep === 2 && hasSpiceOptions ? (
+          {currentStep === 2 && hasSizeOptions ? (
             <>
               <Button
                 variant="outline"
@@ -577,7 +577,7 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
                   onAdd({
                     ...item,
                     quantity,
-                    spiceLevel,
+                    sizeLevel,
                     optionIds: selectedOptions.map((o) => o.id),
                     addons: selectedAddons,
                     unitUsd,
@@ -590,7 +590,7 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
                 {t('addToCart')} · {usd(lineUsd)}
               </Button>
             </>
-          ) : currentStep === 1 && hasSpiceOptions ? (
+          ) : currentStep === 1 && hasSizeOptions ? (
             <>
               <Button
                 variant="outline"
@@ -621,7 +621,7 @@ function CustomizeItem({ item, addons, options, onClose, onAdd }) {
                   onAdd({
                     ...item,
                     quantity,
-                    spiceLevel,
+                    sizeLevel,
                     optionIds: selectedOptions.map((o) => o.id),
                     addons: selectedAddons,
                     unitUsd,
