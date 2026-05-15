@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint app components lib --ext .js,.jsx --max-warnings=0"
+    "lint": "eslint app components lib --ext .js,.jsx --max-warnings=0",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@heroui/react": "^2.6.11",
@@ -16,8 +17,10 @@
     "clsx": "^2.1.1",
     "framer-motion": "^12.38.0",
     "goey-toast": "^0.4.0",
+    "html2canvas-pro": "^2.0.2",
+    "jspdf": "^4.2.1",
     "lucide-react": "^0.468.0",
-    "next": "^15.5.15",
+    "next": "^15.5.18",
     "qrcode.react": "^4.2.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
@@ -26,6 +29,7 @@
     "tailwind-merge": "^2.5.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "autoprefixer": "^10.4.20",
     "eslint": "^8.57.1",
     "eslint-config-next": "^15.5.15",

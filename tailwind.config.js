@@ -44,6 +44,17 @@ module.exports = {
       },
       boxShadow: {
         soft: "var(--shadow-soft)"
+      },
+      fontFamily: {
+        sans: ["var(--font-khmer)", "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: [
+          "ui-monospace",
+          "SFMono-Regular",
+          "Menlo",
+          "Consolas",
+          "var(--font-khmer)",
+          "monospace"
+        ]
       }
     }
   },

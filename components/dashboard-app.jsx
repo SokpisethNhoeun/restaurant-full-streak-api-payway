@@ -123,7 +123,6 @@ const KITCHEN_TIME_FILTERS = [
 ];
 
 const DASHBOARD_SESSION_HINT = 'happyboat-dashboard-session';
-const DASHBOARD_TOKEN_KEY = 'happyboat-dashboard-token';
 const OTP_EXPIRY_FALLBACK_SECONDS = 5 * 60;
 
 const AnalyticsLineChart = lazy(() => import('./analytics-line-chart'));
@@ -173,21 +172,14 @@ function createMerchantSettingsForm(settings = {}) {
   };
 }
 
-function readDashboardToken() {
-  if (typeof window === 'undefined') return null;
-  return window.localStorage.getItem(DASHBOARD_TOKEN_KEY);
-}
-
 function dashboardAuthHeaders(headers = {}) {
-  const token = readDashboardToken();
-  if (!token || headers.Authorization) return headers;
-  return { ...headers, Authorization: `Bearer ${token}` };
+  return headers;
 }
 
 function clearDashboardSession() {
   if (typeof window === 'undefined') return;
   window.localStorage.removeItem(DASHBOARD_SESSION_HINT);
-  window.localStorage.removeItem(DASHBOARD_TOKEN_KEY);
+  window.localStorage.removeItem('happyboat-dashboard-token');
 }
 
 function normalizeSpeechLang(lang = '') {
@@ -283,7 +275,7 @@ export default function DashboardApp() {
 
   useEffect(() => {
     const hasSessionHint = window.localStorage.getItem(DASHBOARD_SESSION_HINT) === '1';
-    if (!hasSessionHint && !readDashboardToken()) return;
+    if (!hasSessionHint) return;
     setSoundReady(window.localStorage.getItem(DASHBOARD_SOUND_READY_KEY) === '1');
 
     let mounted = true;
@@ -486,9 +478,6 @@ export default function DashboardApp() {
   }
 
   function finishSignIn(session) {
-    if (session?.token) {
-      window.localStorage.setItem(DASHBOARD_TOKEN_KEY, session.token);
-    }
     if (session?.username) {
       setUsername(session.username);
     }
@@ -2557,8 +2546,9 @@ function OrderDetailContent({
         ) : null}
         <a
           className="col-span-2"
-          href={`${API_BASE}/api/receipts/orders/${selectedOrder.id}.pdf`}
+          href={dashboardReceiptHref(selectedOrder)}
           target="_blank"
+          rel="noreferrer"
         >
           <Button variant="outline" className="w-full">
             <Printer className="h-4 w-4" />
@@ -4880,6 +4870,12 @@ function formatApiError(error, fallback) {
   const status = error?.status ? `${error.status} ` : '';
   const message = error?.message && !error.message.startsWith('<') ? error.message : fallback;
   return `${fallback}${status ? ` (${status.trim()})` : ''}${message && message !== fallback ? `: ${message}` : ''}`;
+}
+
+function dashboardReceiptHref(order) {
+  const orderId = encodeURIComponent(order?.id || '');
+  const accessToken = encodeURIComponent(order?.customerAccessToken || '');
+  return `/receipt/${orderId}?accessToken=${accessToken}`;
 }
 
 function maskEmail(value) {

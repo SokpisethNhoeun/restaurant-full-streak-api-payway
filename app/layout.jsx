@@ -4,6 +4,14 @@ import { GoeyToastProvider } from "@/components/goey-toast-provider";
 import { AppHeroUIProvider } from "@/components/heroui-provider";
 import { LanguageProvider } from "@/components/language-provider";
 import { PwaController } from "@/components/pwa-controller";
+import { Noto_Sans_Khmer } from "next/font/google";
+
+const notoKhmer = Noto_Sans_Khmer({
+  subsets: ["khmer"],
+  weight: ["400", "500", "700"],
+  display: "swap",
+  variable: "--font-khmer",
+});
 
 export const metadata = {
   title: "HappyBoat QR Ordering",
@@ -57,7 +65,7 @@ const themeScript = `
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className={notoKhmer.variable} suppressHydrationWarning>
       <body>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
         <AppHeroUIProvider>

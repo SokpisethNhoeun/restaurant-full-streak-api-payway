@@ -101,6 +101,11 @@ textarea {
   animation: bottom-sheet-up 180ms ease-out;
 }
 
+.receipt-reveal {
+  opacity: 1;
+  transform: none;
+}
+
 .happyboat-goey-toast {
   min-width: min(92vw, 430px) !important;
   max-width: min(92vw, 430px) !important;
@@ -165,5 +170,125 @@ textarea {
   }
   to {
     transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .receipt-reveal {
+    opacity: 0;
+    transform: translateY(10px);
+    transition:
+      opacity 240ms ease-out,
+      transform 240ms ease-out;
+  }
+
+  .receipt-reveal.receipt-item {
+    transform: translateY(8px);
+    transition-duration: 200ms;
+  }
+
+  .receipt-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .receipt-reveal {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* Thermal receipt paper */
+.receipt-paper {
+  --receipt-edge-size: 10px;
+  border-radius: 4px;
+  background-image:
+    repeating-linear-gradient(180deg, rgba(0, 0, 0, 0.02) 0px, rgba(0, 0, 0, 0.02) 1px, transparent 1px, transparent 3px),
+    linear-gradient(180deg, #ffffff 0%, #fafafa 100%);
+  box-shadow:
+    0 30px 60px -20px rgba(15, 23, 42, 0.25),
+    0 12px 24px -12px rgba(15, 23, 42, 0.2);
+}
+
+.receipt-edge {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: var(--receipt-edge-size);
+  background:
+    radial-gradient(circle at 50% 0, transparent var(--receipt-edge-size), #ffffff var(--receipt-edge-size));
+  background-size: calc(var(--receipt-edge-size) * 2) var(--receipt-edge-size);
+  background-repeat: repeat-x;
+  pointer-events: none;
+}
+
+.receipt-edge-top {
+  top: calc(var(--receipt-edge-size) * -1 + 1px);
+  transform: rotate(180deg);
+  background-color: transparent;
+}
+
+.receipt-edge-bottom {
+  bottom: calc(var(--receipt-edge-size) * -1 + 1px);
+}
+
+.receipt-barcode {
+  display: flex;
+  justify-content: center;
+  gap: 1px;
+  height: 36px;
+}
+.receipt-barcode::before {
+  content: '';
+  width: 100%;
+  background-image: repeating-linear-gradient(
+    90deg,
+    #0f172a 0,
+    #0f172a 2px,
+    transparent 2px,
+    transparent 4px,
+    #0f172a 4px,
+    #0f172a 5px,
+    transparent 5px,
+    transparent 9px,
+    #0f172a 9px,
+    #0f172a 11px,
+    transparent 11px,
+    transparent 13px
+  );
+  background-size: 100% 100%;
+}
+
+/* Customer page scroll reveal */
+.scroll-reveal {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .scroll-reveal {
+    opacity: 0;
+    transform: translateY(14px);
+    transition:
+      opacity 320ms ease-out,
+      transform 320ms ease-out;
+  }
+
+  .scroll-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll-reveal {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+    animation: none !important;
   }
 }

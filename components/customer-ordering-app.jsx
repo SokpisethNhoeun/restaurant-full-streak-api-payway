@@ -6,7 +6,7 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input, Select, Textarea } from '@/components/ui/input';
-import { API_BASE, api } from '@/lib/api';
+import { api } from '@/lib/api';
 import { GOEY_TOAST_CLASS_NAMES, goeyToastOptions } from '@/lib/goey-toast-options';
 import { useBodyScrollLock } from '@/lib/use-body-scroll-lock';
 import { cn, displayUsd, khr, tags, usd } from '@/lib/utils';
@@ -23,6 +23,7 @@ import {
   Maximize2,
   Minus,
   Plus,
+  RefreshCw,
   Search,
   ShoppingBag,
   Trash2,
@@ -45,6 +46,7 @@ const CUSTOMER_STORAGE_TTL_MS = 12 * 60 * 60 * 1000;
 const MIN_CART_TOTAL_USD = 0.01;
 const CUSTOMER_ALERT_AFTER_MS = 10 * 60 * 1000;
 const KHQR_LOGO_WHITE_SRC = '/khqr/khqr-logo.svg';
+const RECEIPT_ORDER_STATUSES = ['PAID', 'RECEIVED', 'PREPARING', 'READY', 'COMPLETED'];
 
 export default function CustomerOrderingApp({ tableNumber }) {
   const { t } = useLanguage();
@@ -81,6 +83,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const pollingInFlight = useRef({});
   const paidToastShown = useRef({});
   const cartRef = useRef(null);
+  const mainRef = useRef(null);
   const customerAudioRef = useRef(null);
   const lastOrderStatusRef = useRef({});
   const welcomeToastShown = useRef(false);
@@ -385,15 +388,17 @@ export default function CustomerOrderingApp({ tableNumber }) {
     return orders.filter((order) => !deleted.has(order.id));
   }, [deletedOrderIds, orders]);
 
+  useScrollReveal(mainRef, [filteredItems.length, visibleOrders.length]);
+
   useEffect(() => {
     if (visibleOrders.length === 0) return;
 
     let cancelled = false;
     async function refreshVisibleOrderStatuses() {
       for (const order of visibleOrders) {
-        if (!order?.id) continue;
+        if (!order?.id || !orderAccessToken(order)) continue;
         try {
-          const updated = await api(`/api/customer/orders/${order.id}`);
+          const updated = await api(customerOrderApiPath(order));
           if (cancelled) return;
           applyCustomerOrderUpdate(updated, { notify: true });
         } catch (error) {
@@ -435,7 +440,10 @@ export default function CustomerOrderingApp({ tableNumber }) {
       ) {
         return current;
       }
-      return upsertById(current, updated);
+      return upsertById(current, {
+        ...updated,
+        customerAccessToken: updated.customerAccessToken || existing?.customerAccessToken,
+      });
     });
     if (options.notify && previousStatus && updated.status && previousStatus !== updated.status) {
       notifyOrderStatusChanged(updated);
@@ -580,7 +588,11 @@ export default function CustomerOrderingApp({ tableNumber }) {
     setMessage('');
     unlockCustomerAlert();
     const payment = payments[orderId];
-    if (!payment) {
+    const needsNewQr =
+      !payment ||
+      payment.status === 'EXPIRED' ||
+      (payment.status === 'PENDING' && secsRemaining(payment) === 0);
+    if (needsNewQr) {
       try {
         const created = await api(`/api/payments/orders/${orderId}/khqr`, { method: 'POST' });
         setPayments((prev) => ({ ...prev, [orderId]: created }));
@@ -618,9 +630,10 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
   async function cancelPaymentFor(orderId) {
     if (!orderId) return;
+    const order = orders.find((entry) => entry.id === orderId);
     setMessage('');
     try {
-      const cancelled = await api(`/api/customer/orders/${orderId}/cancel`, { method: 'PATCH' });
+      const cancelled = await api(customerOrderApiPath(order || { id: orderId }, '/cancel'), { method: 'PATCH' });
       lastOrderStatusRef.current[orderId] = cancelled.status;
       setOrders((prev) => upsertById(prev, cancelled));
       setPayments((prev) => {
@@ -655,7 +668,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
     setMessage('');
     setAlertingOrderId(orderId);
     try {
-      await api(`/api/customer/orders/${orderId}/alert`, { method: 'POST' });
+      await api(customerOrderApiPath(order, '/alert'), { method: 'POST' });
       setAlertedOrderIds((prev) => (prev.includes(orderId) ? prev : [...prev, orderId]));
       showToast(t('customerAlertSent'));
     } catch (error) {
@@ -685,7 +698,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const tableLabel = customerTableLabel(table, tableNumber, t);
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-background pb-24 lg:pb-0">
+    <main ref={mainRef} className="min-h-screen overflow-x-hidden bg-background pb-24 lg:pb-0">
       {/* ── Header ─────────────────────────────────────────── */}
       <header className="fixed left-0 right-0 top-0 z-20 border-b border-border/60 bg-background/95 shadow-sm backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3">
@@ -723,8 +736,9 @@ export default function CustomerOrderingApp({ tableNumber }) {
           {/* Status banner */}
           {message ? (
             <div
+              data-scroll-reveal
               className={cn(
-                'mb-5 flex items-start gap-3 rounded-xl border px-4 py-3 text-sm',
+                'scroll-reveal mb-5 flex items-start gap-3 rounded-xl border px-4 py-3 text-sm',
                 isPaymentMessage
                   ? 'border-primary/30 bg-primary/8 text-primary'
                   : 'border-border bg-muted/50'
@@ -740,7 +754,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
           ) : null}
 
           {/* ── Filters ──────────────────────────────────────── */}
-          <div className="mb-5 space-y-3">
+          <div data-scroll-reveal className="scroll-reveal mb-5 space-y-3">
             {/* Search + Category row */}
             <div className="grid gap-2.5 sm:grid-cols-[1fr_200px]">
               <div className="relative">
@@ -828,7 +842,8 @@ export default function CustomerOrderingApp({ tableNumber }) {
         {/* ── Cart sidebar ───────────────────────────────────── */}
         <aside
           ref={cartRef}
-          className="hidden scroll-mt-24 space-y-4 lg:block lg:sticky lg:top-24 lg:self-start"
+          data-scroll-reveal
+          className="scroll-reveal hidden scroll-mt-24 space-y-4 lg:block lg:sticky lg:top-24 lg:self-start"
         >
           <Card className="overflow-hidden rounded-2xl border-border/60 shadow-sm">
             {/* Cart header */}
@@ -970,7 +985,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
           {/* ── Past orders ───────────────────────────────── */}
           {visibleOrders.length ? (
-            <div className="flex items-center justify-between px-1">
+            <div data-scroll-reveal className="scroll-reveal flex items-center justify-between px-1">
               <h2 className="text-sm font-bold">{t('orderStatus')}</h2>
               <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
                 {visibleOrders.length}
@@ -984,7 +999,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
             const isPaid =
               !isCancelled &&
               (payment?.status === 'PAID' ||
-                ['PAID', 'RECEIVED', 'PREPARING', 'COMPLETED'].includes(order.status));
+                RECEIPT_ORDER_STATUSES.includes(order.status));
             const isReceived = order.status === 'RECEIVED';
             const isExpired =
               order.status === 'EXPIRED' ||
@@ -996,7 +1011,8 @@ export default function CustomerOrderingApp({ tableNumber }) {
             return (
               <Card
                 key={order.id}
-                className="overflow-hidden rounded-2xl border-border/60 shadow-sm"
+                data-scroll-reveal
+                className="scroll-reveal overflow-hidden rounded-2xl border-border/60 shadow-sm"
               >
                 <div
                   className={cn(
@@ -1098,8 +1114,9 @@ export default function CustomerOrderingApp({ tableNumber }) {
                         </Button>
                       ) : null}
                       <a
-                        href={`${API_BASE}/api/receipts/orders/${order.id}.pdf`}
+                        href={receiptHref(order)}
                         target="_blank"
+                        rel="noreferrer"
                         className="flex items-center justify-center gap-1.5 text-sm font-medium text-primary hover:underline"
                       >
                         {t('openReceipt')}
@@ -1228,6 +1245,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
           secondsRemaining={secsRemaining(openModalPayment)}
           onClose={() => setOpenPaymentOrderId(null)}
           onRefresh={() => refreshPaymentFor(openPaymentOrderId)}
+          onReissue={() => openPaymentFor(openPaymentOrderId)}
         />
       ) : null}
     </main>
@@ -1254,8 +1272,9 @@ function MenuCard({ item, onSelect }) {
         }
       }}
       aria-label={`Customize ${item.name}`}
+      data-scroll-reveal
       className={cn(
-        'group flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-md sm:rounded-2xl',
+        'scroll-reveal group flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-md sm:rounded-2xl',
         item.available ? 'cursor-pointer active:scale-[0.99]' : 'cursor-not-allowed opacity-75'
       )}
     >
@@ -1632,7 +1651,7 @@ function MobileCartSheet({
                 const isPaid =
                   !isCancelled &&
                   (payment?.status === 'PAID' ||
-                    ['PAID', 'RECEIVED', 'PREPARING', 'COMPLETED'].includes(order.status));
+                    RECEIPT_ORDER_STATUSES.includes(order.status));
                 const isReceived = order.status === 'RECEIVED';
                 const isExpired =
                   order.status === 'EXPIRED' ||
@@ -1741,8 +1760,9 @@ function MobileCartSheet({
                             </Button>
                           ) : null}
                           <a
-                            href={`${API_BASE}/api/receipts/orders/${order.id}.pdf`}
+                            href={receiptHref(order)}
                             target="_blank"
+                            rel="noreferrer"
                             className="flex items-center justify-center gap-1.5 text-sm font-medium text-primary hover:underline"
                           >
                             {t('openReceipt')}
@@ -1832,7 +1852,7 @@ function CustomerOrderProgress({ status }) {
 }
 
 /* ── PaymentModal ─────────────────────────────────────────── */
-function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) {
+function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, onReissue }) {
   const { t } = useLanguage();
   const isPaid = payment.status === 'PAID';
   const isExpired = payment.status === 'EXPIRED' || secondsRemaining === 0;
@@ -1921,8 +1941,9 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
 
           {isPaid ? (
             <a
-              href={`${API_BASE}/api/receipts/orders/${order.id}.pdf`}
+              href={receiptHref(order)}
               target="_blank"
+              rel="noreferrer"
               className="flex items-center justify-center gap-1.5 text-sm font-semibold text-primary hover:underline"
             >
               {t('downloadReceipt')} <ChevronRight className="h-4 w-4" />
@@ -1959,12 +1980,12 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh }) 
               </Button>
               <Button
                 type="button"
-                variant="outline"
+                variant="secondary"
                 className="h-10 rounded-xl text-sm"
-                onClick={onClose}
+                onClick={onReissue}
               >
-                <X className="h-4 w-4" />
-                {t('close')}
+                <RefreshCw className="h-4 w-4" />
+                {t('generateNewQr')}
               </Button>
             </div>
           )}
@@ -2344,6 +2365,22 @@ function customerStorageKey(tableNumber, bucket) {
   return `happyboat.customer.${tableNumber}.${bucket}`;
 }
 
+function orderAccessToken(order) {
+  return order?.customerAccessToken || order?.accessToken || '';
+}
+
+function customerOrderApiPath(order, suffix = '') {
+  const orderId = encodeURIComponent(order?.id || '');
+  const accessToken = encodeURIComponent(orderAccessToken(order));
+  return `/api/customer/orders/${orderId}${suffix}?accessToken=${accessToken}`;
+}
+
+function receiptHref(order) {
+  const orderId = encodeURIComponent(order?.id || '');
+  const accessToken = encodeURIComponent(orderAccessToken(order));
+  return `/receipt/${orderId}?accessToken=${accessToken}`;
+}
+
 function readCustomerStorage(key, fallback) {
   if (typeof window === 'undefined') return fallback;
   try {
@@ -2469,6 +2506,33 @@ function customerTableLabel(table, tableNumber, t) {
   const value = String(fromTable || fallback).trim();
   if (!value || value === 'undefined' || value === 'null') return '';
   return value.toLowerCase().startsWith('table ') ? value : `${t('table')} ${value}`;
+}
+
+function useScrollReveal(rootRef, deps = []) {
+  useEffect(() => {
+    if (!rootRef?.current) return undefined;
+    const nodes = rootRef.current.querySelectorAll('[data-scroll-reveal]');
+    if (!nodes.length) return undefined;
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce || !('IntersectionObserver' in window)) {
+      nodes.forEach((node) => node.classList.add('is-visible'));
+      return undefined;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-visible');
+            io.unobserve(entry.target);
+          }
+        });
+      },
+      { rootMargin: '0px 0px -8% 0px', threshold: 0.12 }
+    );
+    nodes.forEach((node) => io.observe(node));
+    return () => io.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
 }
 
 function customerStatusStepIndex(status) {
