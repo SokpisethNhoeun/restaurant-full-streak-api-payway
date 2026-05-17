@@ -823,15 +823,22 @@ export default function DashboardApp() {
   }
 
   function mergeOrders(nextOrders, options = {}) {
-    const previousById = new Map(ordersRef.current.map((order) => [order.id, order]));
+    const previousOrders = ordersRef.current;
     const alertOrder =
       Boolean(options.notifyNew) &&
       nextOrders.find((order) => {
-        const previous = previousById.get(order.id);
+        const previous = previousOrders.find((p) => p.id === order.id);
         return shouldNotifyOrder(order) && (!previous || previous.status !== order.status);
       });
-    ordersRef.current = nextOrders;
-    setOrders(nextOrders);
+
+    // Merge to preserve fields like 'items' that might be missing in the list API response
+    const merged = nextOrders.map((next) => {
+      const prev = previousOrders.find((p) => p.id === next.id);
+      return prev ? { ...prev, ...next } : next;
+    });
+
+    ordersRef.current = merged;
+    setOrders(merged);
     if (alertOrder) {
       const didNotify = notifyOrderToast(alertOrder);
       if (didNotify) playSound(isPaidKitchenOrder(alertOrder) ? 'payment' : 'order');
@@ -839,18 +846,27 @@ export default function DashboardApp() {
   }
 
   function applyLiveOrder(order) {
-    const previous = ordersRef.current.find((entry) => entry.id === order.id);
-    const nextOrders = upsertById(ordersRef.current, order);
+    const enrichedOrder = {
+      ...order,
+      firstItemName: order.firstItemName || order.items?.[0]?.itemName,
+      firstCategoryName: order.firstCategoryName || order.items?.[0]?.categoryName,
+      firstItemImageUrl: order.firstItemImageUrl || order.items?.[0]?.imageUrl,
+    };
+    const previous = ordersRef.current.find((entry) => entry.id === enrichedOrder.id);
+    const nextOrders = upsertById(ordersRef.current, enrichedOrder);
     ordersRef.current = nextOrders;
     setOrders(nextOrders);
     setLastUpdatedAt(new Date());
-    if (selectedOrderRef.current?.id === order.id) {
-      setSelectedOrder((current) => (current ? { ...current, ...order } : current));
+    if (selectedOrderRef.current?.id === enrichedOrder.id) {
+      setSelectedOrder((current) => (current ? { ...current, ...enrichedOrder } : current));
     }
-    refreshAfterLiveEvent({ kitchen: isPaidKitchenOrder(order) || order.paymentStatus === 'PAID' });
-    if (shouldNotifyOrder(order) && (!previous || previous.status !== order.status)) {
-      const didNotify = notifyOrderToast(order);
-      if (didNotify) playSound(isPaidKitchenOrder(order) ? 'payment' : 'order');
+    if (isPaidKitchenOrder(enrichedOrder)) {
+      setKitchenItems((current) => upsertById(current, enrichedOrder));
+    }
+    refreshAfterLiveEvent({ kitchen: isPaidKitchenOrder(enrichedOrder) || enrichedOrder.paymentStatus === 'PAID' });
+    if (shouldNotifyOrder(enrichedOrder) && (!previous || previous.status !== enrichedOrder.status)) {
+      const didNotify = notifyOrderToast(enrichedOrder);
+      if (didNotify) playSound(isPaidKitchenOrder(enrichedOrder) ? 'payment' : 'order');
     }
   }
 
@@ -894,15 +910,22 @@ export default function DashboardApp() {
   }
 
   function mergePayments(nextPayments, options = {}) {
-    const previousById = new Map(paymentsRef.current.map((payment) => [payment.id, payment]));
+    const previousPayments = paymentsRef.current;
     const alertPayment =
       Boolean(options.notifyNew) &&
       nextPayments.find((payment) => {
-        const previous = previousById.get(payment.id);
+        const previous = previousPayments.find((p) => p.id === payment.id);
         return shouldNotifyPayment(payment) && (!previous || previous.status !== payment.status);
       });
-    paymentsRef.current = nextPayments;
-    setPayments(nextPayments);
+
+    // Merge to preserve potential fields that might be missing in some responses
+    const merged = nextPayments.map((next) => {
+      const prev = previousPayments.find((p) => p.id === next.id);
+      return prev ? { ...prev, ...next } : next;
+    });
+
+    paymentsRef.current = merged;
+    setPayments(merged);
     if (alertPayment) {
       const didNotify = notifyPaymentToast(alertPayment);
       if (didNotify) playSound('payment');
@@ -2399,6 +2422,7 @@ function OrdersView({
           o.orderNumber?.toLowerCase().includes(q) ||
           o.tableNumber?.toLowerCase().includes(q) ||
           o.firstItemName?.toLowerCase().includes(q) ||
+          o.items?.[0]?.itemName?.toLowerCase().includes(q) ||
           o.firstCategoryName?.toLowerCase().includes(q)
       );
     }
