@@ -51,6 +51,10 @@ const RECEIPT_ORDER_STATUSES = ['PAID', 'RECEIVED', 'PREPARING', 'READY', 'COMPL
 
 export default function CustomerOrderingApp({ tableNumber }) {
   const { t } = useLanguage();
+  const normalizedTableNumber = useMemo(
+    () => normalizeRouteTableNumber(tableNumber),
+    [tableNumber]
+  );
   const [table, setTable] = useState(null);
   const [menu, setMenu] = useState({ categories: [], items: [], addons: [], options: [], sizeLevels: [] });
   const [categoryId, setCategoryId] = useState('');
@@ -95,13 +99,13 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
   const storageKeys = useMemo(
     () => ({
-      cart: customerStorageKey(tableNumber, 'cart'),
-      orders: customerStorageKey(tableNumber, 'orders'),
-      payments: customerStorageKey(tableNumber, 'payments'),
-      deletedOrders: customerStorageKey(tableNumber, 'deleted-orders'),
-      alertedOrders: customerStorageKey(tableNumber, 'alerted-orders'),
+      cart: customerStorageKey(normalizedTableNumber, 'cart'),
+      orders: customerStorageKey(normalizedTableNumber, 'orders'),
+      payments: customerStorageKey(normalizedTableNumber, 'payments'),
+      deletedOrders: customerStorageKey(normalizedTableNumber, 'deleted-orders'),
+      alertedOrders: customerStorageKey(normalizedTableNumber, 'alerted-orders'),
     }),
-    [tableNumber]
+    [normalizedTableNumber]
   );
 
   const unlockCustomerAlert = useCallback(() => {
@@ -288,7 +292,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
       welcomeToastShown.current = false;
       try {
         const [tableData, menuData] = await Promise.all([
-          api(`/api/customer/tables/${tableNumber}`),
+          api(`/api/customer/tables/${encodeURIComponent(normalizedTableNumber)}`),
           api('/api/customer/menu'),
         ]);
         setTable(tableData);
@@ -300,22 +304,22 @@ export default function CustomerOrderingApp({ tableNumber }) {
       }
     }
     load();
-  }, [tableNumber]);
+  }, [normalizedTableNumber]);
 
   useEffect(() => {
     if (loading || !table || welcomeToastShown.current) return;
-    const tableLabel = customerTableLabel(table, tableNumber, t);
+    const tableLabel = customerTableLabel(table, normalizedTableNumber, t);
     if (!tableLabel) return;
     welcomeToastShown.current = true;
     gooeyToast.info(
       t('welcomeTitle'),
       goeyToastOptions({
-        id: `customer-welcome-${tableNumber}`,
+        id: `customer-welcome-${normalizedTableNumber}`,
         description: `${t('youAreAtTable')} ${tableLabel}`,
         icon: <Utensils className="h-4 w-4" />,
       })
     );
-  }, [loading, table, tableNumber, t]);
+  }, [loading, table, normalizedTableNumber, t]);
 
   useEffect(() => {
     const pending = Object.entries(payments).filter(([, p]) => p && p.status === 'PENDING');
@@ -574,7 +578,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
     setSubmitting(true);
     try {
       const payload = {
-        tableNumber,
+        tableNumber: normalizedTableNumber,
         promoCode: promoCode || null,
         idempotencyKey: crypto.randomUUID(),
         items: cart.map((item) => ({
@@ -721,7 +725,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
       const payload = order?.id && orderAccessToken(order)
         ? { orderId: order.id, accessToken: orderAccessToken(order) }
         : {};
-      const staffRequest = await api(`/api/customer/tables/${encodeURIComponent(tableNumber)}/call-staff`, {
+      const staffRequest = await api(`/api/customer/tables/${encodeURIComponent(normalizedTableNumber)}/call-staff`, {
         method: 'POST',
         body: JSON.stringify(payload),
       });
@@ -748,7 +752,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const openModalPayment = openPaymentOrderId ? payments[openPaymentOrderId] : null;
   const isPaymentMessage =
     message === t('paymentReceived') || message.startsWith('Payment received');
-  const tableLabel = customerTableLabel(table, tableNumber, t);
+  const tableLabel = customerTableLabel(table, normalizedTableNumber, t);
 
   return (
     <main ref={mainRef} className="min-h-screen overflow-x-hidden bg-background pb-24 lg:pb-0">
@@ -2559,6 +2563,20 @@ function customerStorageKey(tableNumber, bucket) {
   return `happyboat.customer.${tableNumber}.${bucket}`;
 }
 
+function normalizeRouteTableNumber(value) {
+  let normalized = String(value || '').trim();
+  for (let index = 0; index < 3; index += 1) {
+    try {
+      const decoded = decodeURIComponent(normalized);
+      if (decoded === normalized) break;
+      normalized = decoded.trim();
+    } catch {
+      break;
+    }
+  }
+  return normalized;
+}
+
 function orderAccessToken(order) {
   return order?.customerAccessToken || order?.accessToken || '';
 }
@@ -2697,12 +2715,7 @@ function customerTableLabel(table, tableNumber, t) {
   const label = String(table?.label || '').trim();
   if (label && label !== 'undefined' && label !== 'null') return label;
   const fromTable = table?.tableNumber;
-  let fallback = String(tableNumber || '').trim();
-  try {
-    fallback = decodeURIComponent(fallback);
-  } catch {
-    // Keep the raw route value if it is not URI-encoded cleanly.
-  }
+  const fallback = normalizeRouteTableNumber(tableNumber);
   const value = String(fromTable || fallback).trim();
   if (!value || value === 'undefined' || value === 'null') return '';
   return value.toLowerCase().startsWith('table ') ? value : `${t('table')} ${value}`;
