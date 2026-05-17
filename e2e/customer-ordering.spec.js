@@ -30,6 +30,61 @@ test('customer can place an order and receives a protected receipt link', async 
   });
 });
 
+test('customer can track an order and keep adding food after checkout', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockCustomerApis(page);
+
+  await page.goto('/t/T01');
+
+  await page.getByRole('button', { name: /Customize Fish Amok/i }).click();
+  await page.getByRole('button', { name: /Add to cart ·/i }).click();
+  await page.getByRole('button', { name: /1 items/i }).click();
+  await page.getByRole('button', { name: /Place Order/i }).click();
+  await expect(page.getByText('PAY-9001', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+
+  await expect(page.getByRole('button', { name: /Order status/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /View cart/i })).toBeVisible();
+
+  await page.getByRole('button', { name: /Customize Fish Amok/i }).click();
+  await page.getByRole('button', { name: /Add to cart ·/i }).click();
+
+  await expect(page.getByRole('button', { name: /Order status/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /1 items/i })).toBeVisible();
+
+  await page.getByRole('button', { name: /Order status/i }).click();
+  await expect(page.getByText('HB-2001').last()).toBeVisible();
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+
+  await page.getByRole('button', { name: /1 items/i }).click();
+  await expect(page.getByRole('heading', { name: /Your Order/i })).toBeVisible();
+});
+
+test('promo code applies on enter without an apply button', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  let promoRequestUrl = '';
+
+  await mockCustomerApis(page, {
+    onPromo: async (request) => {
+      promoRequestUrl = request.url();
+    },
+  });
+
+  await page.goto('/t/T01');
+
+  await page.getByRole('button', { name: /Customize Fish Amok/i }).click();
+  await page.getByRole('button', { name: /Add to cart ·/i }).click();
+  await page.getByRole('button', { name: /1 items/i }).click();
+
+  await expect(page.getByRole('button', { name: /^Apply$/i })).toHaveCount(0);
+  const promoInput = page.getByPlaceholder('Promo code').last();
+  await promoInput.fill('SAVE10');
+  await promoInput.press('Enter');
+
+  await expect(page.getByText('Promo code applied.').nth(1)).toBeVisible();
+  expect(promoRequestUrl).toContain('/api/customer/promos/SAVE10/validate');
+});
+
 test('receipt page sends the customer access token to order and pdf APIs', async ({ page }) => {
   let orderRequestUrl = '';
 
@@ -65,7 +120,7 @@ test('receipt page sends the customer access token to order and pdf APIs', async
   );
 });
 
-async function mockCustomerApis(page, { onOrder } = {}) {
+async function mockCustomerApis(page, { onOrder, onPromo } = {}) {
   await page.route('**/api/customer/tables/T01', async (route) => {
     await route.fulfill({
       contentType: 'application/json',
@@ -125,6 +180,48 @@ async function mockCustomerApis(page, { onOrder } = {}) {
             addons: [],
           },
         ],
+      }),
+    });
+  });
+
+  await page.route('**/api/customer/orders/statuses', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: orderId,
+          orderNumber: 'HB-2001',
+          tableNumber: 'T01',
+          status: 'PENDING_PAYMENT',
+          totalUsd: 7.5,
+          totalKhr: 30750,
+          customerAccessToken: 'customer-secret',
+          items: [
+            {
+              id: 'item-1',
+              itemName: 'Fish Amok',
+              quantity: 1,
+              unitPriceUsd: 7.5,
+              subtotalUsd: 7.5,
+              addons: [],
+            },
+          ],
+        },
+      ]),
+    });
+  });
+
+  await page.route('**/api/customer/promos/*/validate?**', async (route) => {
+    await onPromo?.(route.request());
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        valid: true,
+        code: 'SAVE10',
+        description: '10% off',
+        discountType: 'PERCENT',
+        discountValue: 10,
+        maxDiscountUsd: null,
       }),
     });
   });

@@ -13,7 +13,6 @@ import { cn, displayUsd, khr, tags, usd } from '@/lib/utils';
 import { gooeyToast } from 'goey-toast';
 import {
   AlertCircle,
-  BadgePercent,
   BellRing,
   CheckCircle2,
   ChevronRight,
@@ -70,7 +69,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
     showDetail: false,
   });
   const [cartOpen, setCartOpen] = useState(false);
-  const [expandedOrderId, setExpandedOrderId] = useState(null);
+  const [statusOpen, setStatusOpen] = useState(false);
 
   const [orders, setOrders] = useState([]);
   const [payments, setPayments] = useState({});
@@ -95,7 +94,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const customerAudioRef = useRef(null);
   const lastOrderStatusRef = useRef({});
   const welcomeToastShown = useRef(false);
-  useBodyScrollLock(cartOpen || Boolean(activeItem) || Boolean(openPaymentOrderId));
+  useBodyScrollLock(cartOpen || statusOpen || Boolean(activeItem) || Boolean(openPaymentOrderId));
 
   const storageKeys = useMemo(
     () => ({
@@ -554,6 +553,11 @@ export default function CustomerOrderingApp({ tableNumber }) {
     }
   }
 
+  function applyPromoCodeFromInput() {
+    if (!promoCode.trim() || promoState.status === 'checking') return;
+    void applyPromoCode();
+  }
+
   function togglePromoDetail() {
     setPromoState((current) => ({ ...current, showDetail: !current.showDetail }));
   }
@@ -753,6 +757,11 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const isPaymentMessage =
     message === t('paymentReceived') || message.startsWith('Payment received');
   const tableLabel = customerTableLabel(table, normalizedTableNumber, t);
+  const hasOrders = visibleOrders.length > 0;
+  const latestOrder = latestCustomerOrder(visibleOrders);
+  const latestOrderSummary = latestOrder
+    ? `${latestOrder.orderNumber || t('order')} · ${customerStatusLabel(latestOrder.status, t)}`
+    : '';
 
   return (
     <main ref={mainRef} className="min-h-screen overflow-x-hidden bg-background pb-24 lg:pb-0">
@@ -772,7 +781,10 @@ export default function CustomerOrderingApp({ tableNumber }) {
             </div>
             <div>
               <h1 className="text-lg font-bold leading-tight tracking-tight">HappyBoat</h1>
-              <p className="text-xs text-muted-foreground">{tableLabel}</p>
+              <p className="mt-1 inline-flex items-center gap-1.5 rounded-full border border-primary/15 bg-primary/8 px-2.5 py-1 text-xs font-semibold text-primary">
+                <Utensils className="h-3.5 w-3.5" />
+                {tableLabel}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -781,19 +793,15 @@ export default function CustomerOrderingApp({ tableNumber }) {
             <Button
               type="button"
               variant="outline"
-              className="h-11 rounded-xl px-3 text-xs font-semibold"
+              size="icon"
+              className="h-11 w-11 rounded-xl"
               disabled={alertingOrderId === 'table'}
               onClick={() => alertStaffFor(null)}
+              aria-label={alertingOrderId === 'table' ? t('callingStaff') : t('callStaff')}
+              title={alertingOrderId === 'table' ? t('callingStaff') : t('callStaff')}
             >
               <BellRing className="h-4 w-4" />
-              <span className="hidden sm:inline">
-                {alertingOrderId === 'table' ? t('callingStaff') : t('callStaff')}
-              </span>
             </Button>
-            <div className="hidden h-8 items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-3 text-sm font-semibold sm:flex">
-              <Utensils className="h-3.5 w-3.5 text-primary" />
-              {table?.tableNumber || tableLabel}
-            </div>
           </div>
         </div>
       </header>
@@ -885,7 +893,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
           ) : null}
 
           {/* ── Menu grid ────────────────────────────────────── */}
-          <div className="grid auto-rows-fr grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-3">
+          <div className="grid auto-rows-fr grid-cols-2 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {filteredItems.map((item) => (
               <MenuCard key={item.id} item={item} onSelect={() => setActiveItem(item)} />
             ))}
@@ -951,24 +959,19 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
               {/* Promo code */}
               <div className="space-y-2">
-                <div className="flex gap-2">
-                  <Input
-                    value={promoCode}
-                    onChange={(e) => handlePromoCodeChange(e.target.value)}
-                    placeholder={t('promoCode')}
-                    className="h-9 rounded-xl text-sm uppercase tracking-wider"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-11 shrink-0 rounded-xl px-3 text-xs"
-                    disabled={promoState.status === 'checking'}
-                    onClick={applyPromoCode}
-                  >
-                    <BadgePercent className="h-3.5 w-3.5" />
-                    {promoState.status === 'checking' ? t('checking') : t('apply')}
-                  </Button>
-                </div>
+                <Input
+                  value={promoCode}
+                  onChange={(e) => handlePromoCodeChange(e.target.value)}
+                  onBlur={applyPromoCodeFromInput}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      applyPromoCodeFromInput();
+                    }
+                  }}
+                  placeholder={t('promoCode')}
+                  className="h-10 rounded-xl text-sm uppercase tracking-wider"
+                />
                 {promoState.message ? (
                   <div
                     className={cn(
@@ -1061,207 +1064,99 @@ export default function CustomerOrderingApp({ tableNumber }) {
               </span>
             </div>
           ) : null}
-          {visibleOrders.map((order) => {
-            const payment = payments[order.id];
-            const secs = secsRemaining(payment);
-            const isCancelled = order.status === 'CANCELLED' || payment?.status === 'FAILED';
-            const isPaid =
-              !isCancelled &&
-              (payment?.status === 'PAID' ||
-                RECEIPT_ORDER_STATUSES.includes(order.status));
-            const isReceived = order.status === 'RECEIVED';
-            const isExpired =
-              order.status === 'EXPIRED' ||
-              payment?.status === 'EXPIRED' ||
-              (payment?.status === 'PENDING' && secs === 0);
-            const staffAlertSent = alertedOrderIds.includes(order.id);
-
-            return (
-              <Card
-                key={order.id}
-                data-scroll-reveal
-                className="scroll-reveal overflow-hidden rounded-2xl border-border/60 shadow-sm"
-              >
-                <div
-                  className={cn(
-                    'flex items-center justify-between border-b border-border/60 px-4 py-2.5',
-                    isReceived ? 'bg-accent/8' : isPaid ? 'bg-primary/6' : 'bg-muted/30'
-                  )}
-                >
-                  <div>
-                    <p className="text-sm font-bold">{order.orderNumber}</p>
-                    <p className="text-xs text-muted-foreground capitalize">
-                      {order.status?.toLowerCase()}
-                    </p>
-                  </div>
-                  <span
-                    className={cn(
-                      'rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide',
-                      isReceived
-                        ? 'bg-accent/15 text-accent'
-                        : isPaid
-                          ? 'bg-primary/15 text-primary'
-                          : isCancelled
-                            ? 'bg-destructive/10 text-destructive'
-                            : isExpired
-                              ? 'bg-destructive/10 text-destructive'
-                              : payment
-                                ? 'bg-secondary/20 text-secondary-foreground'
-                                : 'bg-muted text-muted-foreground'
-                    )}
-                  >
-                    {isReceived
-                      ? t('receivedByStaff')
-                      : isPaid
-                        ? t('paid')
-                        : isCancelled
-                          ? t('cancelled')
-                          : isExpired
-                            ? t('expired')
-                            : payment
-                              ? t('pending')
-                              : t('unpaid')}
-                  </span>
-                </div>
-                <CardContent className="space-y-3 p-4">
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-base font-bold">{displayUsd(order.totalUsd)}</span>
-                    <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
-                  </div>
-                  <CustomerOrderProgress status={order.status} />
-
-                  {/* View Details button */}
-                  <button
-                    type="button"
-                    onClick={() => setExpandedOrderId(expandedOrderId === order.id ? null : order.id)}
-                    className="w-full text-left text-xs font-medium text-primary hover:underline"
-                  >
-                    {expandedOrderId === order.id ? t('hideDetails') : t('viewDetails')}
-                  </button>
-
-                  {/* Expanded order details */}
-                  {expandedOrderId === order.id ? <OrderDetailMiniItems order={order} /> : null}
-
-                  {isCancelled ? (
-                    <>
-                      <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
-                        {t('orderCancelled')}
-                      </div>
-                      <Button
-                        className="h-11 w-full rounded-xl text-sm"
-                        variant="outline"
-                        onClick={() => deleteLocalOrder(order.id)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        {t('deleteOrder')}
-                      </Button>
-                    </>
-                  ) : isPaid ? (
-                    <>
-                      <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/8 px-3 py-2.5 text-xs font-medium text-primary">
-                        <CheckCircle2 className="h-4 w-4 shrink-0" />
-                        {t('paymentConfirmed')}
-                      </div>
-                      <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/8 px-3 py-2 text-xs font-medium text-primary">
-                        <Clock className="h-3.5 w-3.5 shrink-0" />
-                        {t('paidMinutes')} {paidWaitingMinutes(order, payment, now)}m
-                      </div>
-                      <Button
-                        className="h-11 w-full rounded-xl text-sm"
-                        variant="secondary"
-                        disabled={staffAlertSent || alertingOrderId === order.id}
-                        onClick={() => alertStaffFor(order.id)}
-                      >
-                        <BellRing className="h-3.5 w-3.5" />
-                        {staffAlertSent
-                          ? t('callStaffSentShort')
-                          : alertingOrderId === order.id
-                            ? t('checking')
-                            : t('callStaff')}
-                      </Button>
-                      <a
-                        href={receiptHref(order)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex items-center justify-center gap-1.5 text-sm font-medium text-primary hover:underline"
-                      >
-                        {t('openReceipt')}
-                        <ChevronRight className="h-3.5 w-3.5" />
-                      </a>
-                    </>
-                  ) : (
-                    <>
-                      {payment && !isExpired ? (
-                        <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                          <Clock className="h-3.5 w-3.5 shrink-0" />
-                          {t('expiresIn')} {formatDuration(secs)}
-                        </div>
-                      ) : null}
-                      {isExpired ? (
-                        <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
-                          {t('qrExpiredShort')}
-                        </div>
-                      ) : null}
-                      <div className="grid gap-2">
-                        <Button
-                          className="h-11 w-full rounded-xl text-sm"
-                          variant="secondary"
-                          onClick={() => openPaymentFor(order.id)}
-                        >
-                          <Zap className="h-3.5 w-3.5" />
-                          {payment ? t('viewPayment') : t('payWithBakong')}
-                        </Button>
-                        <Button
-                          className="h-11 w-full rounded-xl text-sm"
-                          variant="outline"
-                          onClick={() => cancelPaymentFor(order.id)}
-                        >
-                          <X className="h-3.5 w-3.5" />
-                          {t('cancelPayment')}
-                        </Button>
-                      </div>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })}
+          <OrderStatusList
+            orders={visibleOrders}
+            payments={payments}
+            secsRemaining={secsRemaining}
+            onOpenPayment={openPaymentFor}
+            onCancelPayment={cancelPaymentFor}
+            onDeleteOrder={deleteLocalOrder}
+            onAlertStaff={alertStaffFor}
+            alertingOrderId={alertingOrderId}
+            alertedOrderIds={alertedOrderIds}
+            now={now}
+            reveal
+          />
         </aside>
       </div>
 
-      {/* ── Mobile sticky cart bar ─────────────────────────── */}
-      {!activeItem && !openPaymentOrderId && !cartOpen ? (
-        <div className="fixed bottom-4 left-4 right-4 z-30 lg:hidden">
-          <button
-            type="button"
-            onClick={() => setCartOpen(true)}
-            className={cn(
-              'relative flex w-full items-center justify-between rounded-2xl px-5 py-3.5 shadow-lg transition-all',
-              cart.length > 0
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-card border border-border text-foreground'
-            )}
-          >
-            <span
+      {/* ── Mobile sticky action bar ───────────────────────── */}
+      {!activeItem && !openPaymentOrderId && !cartOpen && !statusOpen ? (
+        <div className="fixed bottom-3 left-3 right-3 z-30 lg:hidden">
+          {hasOrders ? (
+            <div className="rounded-2xl border border-white/70 bg-background/95 p-2 shadow-xl backdrop-blur-md">
+              <div className="grid grid-cols-[minmax(0,1fr)_minmax(96px,auto)] gap-2">
+                <button
+                  type="button"
+                  onClick={() => setStatusOpen(true)}
+                  className="flex min-w-0 items-center justify-between gap-3 rounded-xl bg-primary px-4 py-3 text-left text-primary-foreground shadow-sm transition active:scale-[0.99]"
+                  aria-label={t('orderStatus')}
+                >
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-2 text-sm font-bold">
+                      <Clock className="h-4 w-4 shrink-0" />
+                      {t('orderStatus')}
+                    </span>
+                    {latestOrderSummary ? (
+                      <span className="mt-0.5 block truncate text-[11px] font-medium text-primary-foreground/80">
+                        {latestOrderSummary}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="flex h-7 min-w-7 shrink-0 items-center justify-center rounded-full bg-white/18 px-2 text-xs font-bold">
+                    {visibleOrders.length}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCartOpen(true)}
+                  className="flex min-w-0 flex-col items-center justify-center rounded-xl border border-border bg-card px-3 py-2 text-foreground shadow-sm transition active:scale-[0.99]"
+                  aria-label={cart.length > 0 ? t('cartItemCount').replace('{count}', cart.length) : t('viewCart')}
+                >
+                  <span className="flex items-center gap-1.5 text-xs font-bold">
+                    <ShoppingBag className="h-4 w-4 text-primary" />
+                    {cart.length > 0 ? cart.length : t('viewCart')}
+                  </span>
+                  {cart.length > 0 ? (
+                    <span className="mt-0.5 text-[11px] font-semibold text-muted-foreground">
+                      {usd(totals.totalUsd)}
+                    </span>
+                  ) : null}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setCartOpen(true)}
               className={cn(
-                'absolute -top-3 left-1/2 flex h-6 w-12 -translate-x-1/2 items-center justify-center rounded-full border shadow-sm',
+                'relative flex w-full items-center justify-between rounded-2xl px-5 py-3.5 shadow-lg transition-all',
                 cart.length > 0
-                  ? 'border-primary/30 bg-primary text-primary-foreground'
-                  : 'border-border bg-card text-muted-foreground'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'border border-border bg-card text-foreground'
               )}
             >
-              <ChevronUp className="h-4 w-4" />
-            </span>
-            <span className="flex items-center gap-2.5 text-sm font-semibold">
-              <ShoppingBag className="h-4 w-4" />
-              {cart.length > 0
-                ? t('cartItemCount').replace('{count}', cart.length)
-                : t('viewCart')}
-            </span>
-            {cart.length > 0 ? (
-              <span className="text-sm font-bold">{usd(totals.totalUsd)}</span>
-            ) : null}
-          </button>
+              <span
+                className={cn(
+                  'absolute -top-3 left-1/2 flex h-6 w-12 -translate-x-1/2 items-center justify-center rounded-full border shadow-sm',
+                  cart.length > 0
+                    ? 'border-primary/30 bg-primary text-primary-foreground'
+                    : 'border-border bg-card text-muted-foreground'
+                )}
+              >
+                <ChevronUp className="h-4 w-4" />
+              </span>
+              <span className="flex items-center gap-2.5 text-sm font-semibold">
+                <ShoppingBag className="h-4 w-4" />
+                {cart.length > 0
+                  ? t('cartItemCount').replace('{count}', cart.length)
+                  : t('viewCart')}
+              </span>
+              {cart.length > 0 ? (
+                <span className="text-sm font-bold">{usd(totals.totalUsd)}</span>
+              ) : null}
+            </button>
+          )}
         </div>
       ) : null}
 
@@ -1273,7 +1168,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
           promoCode={promoCode}
           onPromoCodeChange={handlePromoCodeChange}
           promoState={promoState}
-          onApplyPromo={applyPromoCode}
+          onPromoApplyIntent={applyPromoCodeFromInput}
           onTogglePromoDetail={togglePromoDetail}
           totals={totals}
           submitting={submitting}
@@ -1289,6 +1184,22 @@ export default function CustomerOrderingApp({ tableNumber }) {
           alertedOrderIds={alertedOrderIds}
           now={now}
           onClose={() => setCartOpen(false)}
+        />
+      ) : null}
+
+      {statusOpen ? (
+        <MobileOrderStatusSheet
+          orders={visibleOrders}
+          payments={payments}
+          secsRemaining={secsRemaining}
+          onOpenPayment={openPaymentFor}
+          onCancelPayment={cancelPaymentFor}
+          onDeleteOrder={deleteLocalOrder}
+          onAlertStaff={alertStaffFor}
+          alertingOrderId={alertingOrderId}
+          alertedOrderIds={alertedOrderIds}
+          now={now}
+          onClose={() => setStatusOpen(false)}
         />
       ) : null}
 
@@ -1354,13 +1265,13 @@ function CustomerOrderingSkeleton({ label }) {
             </div>
           </div>
           <p className="mb-3 text-xs font-medium text-muted-foreground">{label}</p>
-          <div className="grid auto-rows-fr grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-3">
+          <div className="grid auto-rows-fr grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {[0, 1, 2, 3, 4, 5].map((index) => (
               <div
                 key={index}
-                className="flex min-h-[250px] flex-col overflow-hidden rounded-xl border border-border/60 bg-card sm:rounded-2xl"
+                className="flex min-h-[300px] flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm"
               >
-                <div className="aspect-square animate-pulse bg-muted sm:aspect-[16/10]" />
+                <div className="aspect-[4/3] animate-pulse bg-muted" />
                 <div className="flex flex-1 flex-col gap-2 p-3.5">
                   <div className="h-4 w-4/5 animate-pulse rounded bg-muted" />
                   <div className="h-3 w-full animate-pulse rounded bg-muted" />
@@ -1427,18 +1338,19 @@ function MenuCard({ item, onSelect }) {
       aria-label={`Customize ${item.name}`}
       data-scroll-reveal
       className={cn(
-        'scroll-reveal group flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-md sm:rounded-2xl',
+        'scroll-reveal group flex min-h-[310px] flex-col overflow-hidden rounded-2xl border border-border/70 bg-card shadow-lg transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-xl',
         item.available ? 'cursor-pointer active:scale-[0.99]' : 'cursor-not-allowed grayscale-[35%]'
       )}
     >
       {/* Image */}
-      <div className="relative aspect-square overflow-hidden bg-muted sm:aspect-[16/10]">
+      <div className="relative aspect-[4/3] overflow-hidden bg-muted">
         <MenuImage
           src={item.imageUrl}
           alt={item.name}
-          className="object-cover transition-transform duration-500 group-hover:scale-105"
-          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 260px"
+          className="object-cover transition-transform duration-500 group-hover:scale-105 overflow-hidden"
+          sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 320px"
         />
+        <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/35 to-transparent" />
         {!item.available ? (
           <div className="absolute inset-0 flex items-center justify-center bg-background/70 backdrop-blur-sm">
             <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-semibold text-muted-foreground sm:px-3 sm:text-xs">
@@ -1448,13 +1360,13 @@ function MenuCard({ item, onSelect }) {
         ) : null}
         {/* Dietary tags overlay */}
         {tags(item.dietaryTags).length > 0 ? (
-          <div className="absolute left-1.5 top-1.5 flex flex-wrap gap-1 sm:left-2 sm:top-2">
+          <div className="absolute left-3 top-3 flex flex-wrap gap-1.5">
             {tags(item.dietaryTags)
               .slice(0, 2)
               .map((tag) => (
                 <span
                   key={tag}
-                  className="rounded-full bg-background/80 px-1.5 py-0.5 text-[9px] font-semibold backdrop-blur-sm sm:px-2 sm:text-[10px]"
+                  className="rounded-full border border-white/70 bg-background/90 px-2.5 py-1 text-[10px] font-semibold shadow-sm backdrop-blur-sm"
                 >
                   {tag}
                 </span>
@@ -1464,18 +1376,18 @@ function MenuCard({ item, onSelect }) {
       </div>
 
       {/* Body */}
-      <div className="flex flex-1 flex-col p-2.5 sm:p-3.5">
-        <h2 className="line-clamp-2 text-xs font-bold leading-snug sm:line-clamp-1 sm:text-sm">
+      <div className="flex flex-1 flex-col p-4">
+        <h2 className="line-clamp-2 text-base font-bold leading-snug">
           {item.name}
         </h2>
-        <p className="mt-1 line-clamp-2 flex-1 text-[11px] leading-snug text-muted-foreground sm:text-xs sm:leading-relaxed">
+        <p className="mt-1.5 line-clamp-2 flex-1 text-sm leading-relaxed text-muted-foreground">
           {item.description}
         </p>
 
-        <div className="mt-2 flex items-center justify-between gap-2 sm:mt-3">
+        <div className="mt-4 flex items-center justify-between gap-3">
           <div>
-            <div className="text-xs font-bold sm:text-sm">{displayUsd(item.priceUsd)}</div>
-            <div className="text-[9px] text-muted-foreground sm:text-[10px]">
+            <div className="text-lg font-bold">{displayUsd(item.priceUsd)}</div>
+            <div className="text-xs text-muted-foreground">
               {khr(item.priceKhr)}
             </div>
           </div>
@@ -1486,9 +1398,9 @@ function MenuCard({ item, onSelect }) {
             }}
             disabled={!item.available}
             className={cn(
-              'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-all',
+              'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-all',
               item.available
-                ? 'bg-primary text-primary-foreground shadow-sm hover:opacity-90 active:scale-95'
+                ? 'bg-primary text-primary-foreground shadow-md hover:opacity-90 active:scale-95'
                 : 'cursor-not-allowed bg-muted text-muted-foreground'
             )}
             aria-label={`${t('addToCart')} ${item.name}`}
@@ -1616,6 +1528,284 @@ function OrderDetailMiniItems({ order }) {
   );
 }
 
+function OrderStatusList({
+  orders,
+  payments,
+  secsRemaining,
+  onOpenPayment,
+  onCancelPayment,
+  onDeleteOrder,
+  onAlertStaff,
+  alertingOrderId,
+  alertedOrderIds,
+  now,
+  onBeforeOpenPayment,
+  reveal = false,
+}) {
+  const [expandedOrderId, setExpandedOrderId] = useState(null);
+
+  return (
+    <div className="space-y-3">
+      {orders.map((order) => (
+        <OrderStatusCard
+          key={order.id}
+          order={order}
+          payment={payments[order.id]}
+          secondsRemaining={secsRemaining(payments[order.id])}
+          expanded={expandedOrderId === order.id}
+          onToggleExpanded={() =>
+            setExpandedOrderId((current) => (current === order.id ? null : order.id))
+          }
+          onOpenPayment={() => {
+            onBeforeOpenPayment?.();
+            onOpenPayment(order.id);
+          }}
+          onCancelPayment={() => onCancelPayment(order.id)}
+          onDeleteOrder={() => onDeleteOrder(order.id)}
+          onAlertStaff={() => onAlertStaff(order.id)}
+          alertingOrderId={alertingOrderId}
+          staffAlertSent={alertedOrderIds.includes(order.id)}
+          now={now}
+          reveal={reveal}
+        />
+      ))}
+    </div>
+  );
+}
+
+function OrderStatusCard({
+  order,
+  payment,
+  secondsRemaining,
+  expanded,
+  onToggleExpanded,
+  onOpenPayment,
+  onCancelPayment,
+  onDeleteOrder,
+  onAlertStaff,
+  alertingOrderId,
+  staffAlertSent,
+  now,
+  reveal = false,
+}) {
+  const { t } = useLanguage();
+  const isCancelled = order.status === 'CANCELLED' || payment?.status === 'FAILED';
+  const isPaid =
+    !isCancelled &&
+    (payment?.status === 'PAID' || RECEIPT_ORDER_STATUSES.includes(order.status));
+  const isReceived = order.status === 'RECEIVED';
+  const isExpired =
+    order.status === 'EXPIRED' ||
+    payment?.status === 'EXPIRED' ||
+    (payment?.status === 'PENDING' && secondsRemaining === 0);
+  const statusLabel = isReceived
+    ? t('receivedByStaff')
+    : isPaid
+      ? t('paid')
+      : isCancelled
+        ? t('cancelled')
+        : isExpired
+          ? t('expired')
+          : payment
+            ? t('pending')
+            : t('unpaid');
+  const staffLabel = staffAlertSent
+    ? t('callStaffSentShort')
+    : alertingOrderId === order.id
+      ? t('checking')
+      : t('callStaff');
+
+  return (
+    <Card
+      data-scroll-reveal={reveal ? true : undefined}
+      className={cn(
+        'overflow-hidden rounded-2xl border-border/60 bg-card shadow-lg',
+        reveal ? 'scroll-reveal' : ''
+      )}
+    >
+      <div
+        className={cn(
+          'flex items-center justify-between border-b border-border/60 px-4 py-3',
+          isReceived ? 'bg-accent/8' : isPaid ? 'bg-primary/6' : 'bg-muted/30'
+        )}
+      >
+        <div className="min-w-0">
+          <p className="truncate text-sm font-bold">{order.orderNumber}</p>
+          <p className="text-xs text-muted-foreground capitalize">{order.status?.toLowerCase()}</p>
+        </div>
+        <span
+          className={cn(
+            'rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide',
+            isReceived
+              ? 'bg-accent/15 text-accent'
+              : isPaid
+                ? 'bg-primary/15 text-primary'
+                : isCancelled
+                  ? 'bg-destructive/10 text-destructive'
+                  : isExpired
+                    ? 'bg-destructive/10 text-destructive'
+                    : payment
+                      ? 'bg-secondary/20 text-secondary-foreground'
+                      : 'bg-muted text-muted-foreground'
+          )}
+        >
+          {statusLabel}
+        </span>
+      </div>
+
+      <CardContent className="space-y-3 p-4">
+        <div className="flex items-baseline gap-2">
+          <span className="text-base font-bold">{displayUsd(order.totalUsd)}</span>
+          <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
+        </div>
+        <CustomerOrderProgress status={order.status} />
+
+        <button
+          type="button"
+          onClick={onToggleExpanded}
+          className="w-full text-left text-xs font-medium text-primary hover:underline"
+        >
+          {expanded ? t('hideDetails') : t('viewDetails')}
+        </button>
+
+        {expanded ? <OrderDetailMiniItems order={order} /> : null}
+
+        {isCancelled ? (
+          <>
+            <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
+              {t('orderCancelled')}
+            </div>
+            <Button
+              className="h-11 w-full rounded-xl text-sm"
+              variant="outline"
+              onClick={onDeleteOrder}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {t('deleteOrder')}
+            </Button>
+          </>
+        ) : isPaid ? (
+          <div className="grid gap-2">
+            <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/8 px-3 py-2.5 text-xs font-medium text-primary">
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
+              {t('paymentConfirmed')}
+            </div>
+            <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/8 px-3 py-2 text-xs font-medium text-primary">
+              <Clock className="h-3.5 w-3.5 shrink-0" />
+              {t('paidMinutes')} {paidWaitingMinutes(order, payment, now)}m
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                className="h-11 w-11 shrink-0 rounded-xl p-0"
+                variant="secondary"
+                disabled={staffAlertSent || alertingOrderId === order.id}
+                onClick={onAlertStaff}
+                aria-label={staffLabel}
+                title={staffLabel}
+              >
+                <BellRing className="h-4 w-4" />
+              </Button>
+              <a
+                href={receiptHref(order)}
+                target="_blank"
+                rel="noreferrer"
+                className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl border border-primary/20 bg-primary/8 px-3 text-sm font-semibold text-primary transition hover:bg-primary/10"
+              >
+                {t('openReceipt')}
+                <ChevronRight className="h-3.5 w-3.5" />
+              </a>
+            </div>
+          </div>
+        ) : (
+          <div className="grid gap-2">
+            {payment && !isExpired ? (
+              <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                <Clock className="h-3.5 w-3.5 shrink-0" />
+                {t('expiresIn')} {formatDuration(secondsRemaining)}
+              </div>
+            ) : null}
+            {isExpired ? (
+              <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
+                {t('qrExpiredShort')}
+              </div>
+            ) : null}
+            <Button className="h-11 w-full rounded-xl text-sm" variant="secondary" onClick={onOpenPayment}>
+              <Zap className="h-3.5 w-3.5" />
+              {payment ? t('viewPayment') : t('payWithBakong')}
+            </Button>
+            <Button className="h-11 w-full rounded-xl text-sm" variant="outline" onClick={onCancelPayment}>
+              <X className="h-3.5 w-3.5" />
+              {t('cancelPayment')}
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function MobileOrderStatusSheet({
+  orders,
+  payments,
+  secsRemaining,
+  onOpenPayment,
+  onCancelPayment,
+  onDeleteOrder,
+  onAlertStaff,
+  alertingOrderId,
+  alertedOrderIds,
+  now,
+  onClose,
+}) {
+  const { t } = useLanguage();
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-end overflow-hidden bg-black/40 backdrop-blur-sm lg:hidden"
+      onClick={onClose}
+    >
+      <div
+        className="bottom-sheet-animate flex max-h-[92dvh] w-full flex-col rounded-t-2xl bg-card text-card-foreground shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex justify-center pt-2">
+          <div className="h-1.5 w-12 rounded-full bg-muted-foreground/30" />
+        </div>
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border/60 bg-card/95 p-4 backdrop-blur">
+          <div className="min-w-0">
+            <h2 className="text-base font-bold">{t('orderStatus')}</h2>
+            <p className="text-xs text-muted-foreground">
+              {t('orders')}: {orders.length}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-border p-1.5 text-muted-foreground hover:text-foreground"
+            aria-label={t('close')}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          <OrderStatusList
+            orders={orders}
+            payments={payments}
+            secsRemaining={secsRemaining}
+            onOpenPayment={onOpenPayment}
+            onCancelPayment={onCancelPayment}
+            onDeleteOrder={onDeleteOrder}
+            onAlertStaff={onAlertStaff}
+            alertingOrderId={alertingOrderId}
+            alertedOrderIds={alertedOrderIds}
+            now={now}
+            onBeforeOpenPayment={onClose}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── MobileCartSheet ─────────────────────────────────────── */
 function MobileCartSheet({
   cart,
@@ -1624,7 +1814,7 @@ function MobileCartSheet({
   promoCode,
   onPromoCodeChange,
   promoState,
-  onApplyPromo,
+  onPromoApplyIntent,
   onTogglePromoDetail,
   totals,
   submitting,
@@ -1699,24 +1889,19 @@ function MobileCartSheet({
           </div>
 
           <div className="space-y-2">
-            <div className="grid gap-2">
-              <Input
-                value={promoCode}
-                onChange={(event) => onPromoCodeChange(event.target.value)}
-                placeholder={t('promoCode')}
-                className="h-10 w-full rounded-xl text-sm uppercase tracking-wider"
-              />
-              <Button
-                type="button"
-                variant="outline"
-                className="h-11 w-full rounded-xl px-3 text-xs"
-                disabled={promoState.status === 'checking'}
-                onClick={onApplyPromo}
-              >
-                <BadgePercent className="h-3.5 w-3.5" />
-                {promoState.status === 'checking' ? t('checking') : t('apply')}
-              </Button>
-            </div>
+            <Input
+              value={promoCode}
+              onChange={(event) => onPromoCodeChange(event.target.value)}
+              onBlur={onPromoApplyIntent}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  onPromoApplyIntent();
+                }
+              }}
+              placeholder={t('promoCode')}
+              className="h-10 w-full rounded-xl text-sm uppercase tracking-wider"
+            />
             {promoState.message ? (
               <div
                 className={cn(
@@ -1751,165 +1936,24 @@ function MobileCartSheet({
             ) : null}
           </div>
 
-          {orders.length ? (
+          {/* {orders.length ? (
             <div className="space-y-3 border-t border-border/60 pt-4">
               <h3 className="text-sm font-bold">{t('orderStatus')}</h3>
-              {orders.map((order) => {
-                const payment = payments[order.id];
-                const secs = secsRemaining(payment);
-                const isCancelled = order.status === 'CANCELLED' || payment?.status === 'FAILED';
-                const isPaid =
-                  !isCancelled &&
-                  (payment?.status === 'PAID' ||
-                    RECEIPT_ORDER_STATUSES.includes(order.status));
-                const isReceived = order.status === 'RECEIVED';
-                const isExpired =
-                  order.status === 'EXPIRED' ||
-                  payment?.status === 'EXPIRED' ||
-                  (payment?.status === 'PENDING' && secs === 0);
-                const staffAlertSent = alertedOrderIds.includes(order.id);
-                return (
-                  <div
-                    key={order.id}
-                    className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm"
-                  >
-                    <div
-                      className={cn(
-                        'flex items-center justify-between border-b border-border/60 px-4 py-2.5',
-                        isReceived ? 'bg-accent/8' : isPaid ? 'bg-primary/6' : 'bg-muted/30'
-                      )}
-                    >
-                      <div>
-                        <p className="text-sm font-bold">{order.orderNumber}</p>
-                        <p className="text-xs text-muted-foreground capitalize">
-                          {order.status?.toLowerCase()}
-                        </p>
-                      </div>
-                      <span
-                        className={cn(
-                          'rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide',
-                          isReceived
-                            ? 'bg-accent/15 text-accent'
-                            : isPaid
-                              ? 'bg-primary/15 text-primary'
-                              : isCancelled
-                                ? 'bg-destructive/10 text-destructive'
-                                : isExpired
-                                  ? 'bg-destructive/10 text-destructive'
-                                  : payment
-                                    ? 'bg-secondary/20 text-secondary-foreground'
-                                    : 'bg-muted text-muted-foreground'
-                        )}
-                      >
-                        {isReceived
-                          ? t('receivedByStaff')
-                          : isPaid
-                            ? t('paid')
-                            : isCancelled
-                              ? t('cancelled')
-                              : isExpired
-                                ? t('expired')
-                                : payment
-                                  ? t('pending')
-                                  : t('unpaid')}
-                      </span>
-                    </div>
-                    <div className="space-y-3 p-4">
-                      <div className="flex items-baseline gap-2">
-                        <span className="text-base font-bold">{displayUsd(order.totalUsd)}</span>
-                        <span className="text-xs text-muted-foreground">{khr(order.totalKhr)}</span>
-                      </div>
-                      <CustomerOrderProgress status={order.status} />
-                      
-                      {/* View Details button */}
-                      <button
-                        type="button"
-                        onClick={() => setExpandedOrderId(expandedOrderId === order.id ? null : order.id)}
-                        className="w-full text-left text-xs font-medium text-primary hover:underline"
-                      >
-                        {expandedOrderId === order.id ? t('hideDetails') : t('viewDetails')}
-                      </button>
-
-                      {/* Expanded order details */}
-                      {expandedOrderId === order.id ? <OrderDetailMiniItems order={order} /> : null}
-
-                      {isCancelled ? (
-                        <>
-                          <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
-                            {t('orderCancelled')}
-                          </div>
-                          <Button
-                            className="h-11 w-full rounded-xl text-sm"
-                            variant="outline"
-                            onClick={() => onDeleteOrder(order.id)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            {t('deleteOrder')}
-                          </Button>
-                        </>
-                      ) : isPaid ? (
-                        <div className="grid gap-2">
-                          <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/8 px-3 py-2 text-xs font-medium text-primary">
-                            <Clock className="h-3.5 w-3.5 shrink-0" />
-                            {t('paidMinutes')} {paidWaitingMinutes(order, payment, now)}m
-                          </div>
-                          <Button
-                            className="h-11 w-full rounded-xl text-sm"
-                            variant="secondary"
-                            disabled={staffAlertSent || alertingOrderId === order.id}
-                            onClick={() => onAlertStaff(order.id)}
-                          >
-                            <BellRing className="h-3.5 w-3.5" />
-                            {staffAlertSent
-                              ? t('callStaffSentShort')
-                              : alertingOrderId === order.id
-                                ? t('checking')
-                                : t('callStaff')}
-                          </Button>
-                          <a
-                            href={receiptHref(order)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="flex items-center justify-center gap-1.5 text-sm font-medium text-primary hover:underline"
-                          >
-                            {t('openReceipt')}
-                            <ChevronRight className="h-3.5 w-3.5" />
-                          </a>
-                        </div>
-                      ) : (
-                        <div className="grid gap-2">
-                          {isExpired ? (
-                            <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
-                              {t('qrExpiredShort')}
-                            </div>
-                          ) : null}
-                          <Button
-                            className="h-11 w-full rounded-xl text-sm"
-                            variant="secondary"
-                            onClick={() => {
-                              onClose();
-                              onOpenPayment(order.id);
-                            }}
-                          >
-                            <Zap className="h-3.5 w-3.5" />
-                            {payment ? t('viewPayment') : t('payWithBakong')}
-                          </Button>
-                          <Button
-                            className="h-11 w-full rounded-xl text-sm"
-                            variant="outline"
-                            onClick={() => onCancelPayment(order.id)}
-                          >
-                            <X className="h-3.5 w-3.5" />
-                            {t('cancelPayment')}
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+              <OrderStatusList
+                orders={orders}
+                payments={payments}
+                secsRemaining={secsRemaining}
+                onOpenPayment={onOpenPayment}
+                onCancelPayment={onCancelPayment}
+                onDeleteOrder={onDeleteOrder}
+                onAlertStaff={onAlertStaff}
+                alertingOrderId={alertingOrderId}
+                alertedOrderIds={alertedOrderIds}
+                now={now}
+                onBeforeOpenPayment={onClose}
+              />
             </div>
-          ) : null}
+          ) : null} */}
         </div>
 
         <div className="border-t border-border/60 bg-card/95 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] backdrop-blur">

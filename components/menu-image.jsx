@@ -9,7 +9,7 @@ const FALLBACK_IMAGE = '/logo.png';
 export function MenuImage({
   src,
   alt,
-  className = 'object-cover',
+  className = 'object-cover overflow-hidden',
   sizes = '(max-width: 640px) 100vw, 320px',
   priority = false,
 }) {

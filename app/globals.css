@@ -23,6 +23,13 @@
   --destructive: 0 72% 51%;
   --destructive-foreground: 0 0% 100%;
   --shadow-soft: 0 18px 50px rgba(16, 24, 40, 0.08);
+  
+  /* Toast/Status */
+  --toast-bg: 0 0% 100%;
+  --toast-text: 221 39% 13%;
+  --toast-action-bg: 0 0% 0% 0.05;
+  --toast-action-border: 0 0% 0% 0.1;
+  --toast-progress: 173 67% 32%;
 }
 
 .dark {
@@ -56,6 +63,13 @@
   --status-warning-bg: 39 80% 25%;
   --status-info: 202 78% 45%;
   --status-info-bg: 202 70% 22%;
+
+  /* Toast/Status */
+  --toast-bg: 217 32% 22%;
+  --toast-text: 210 40% 98%;
+  --toast-action-bg: 0 0% 100% 0.16;
+  --toast-action-border: 0 0% 100% 0.28;
+  --toast-progress: 142 71% 45%;
 }
 
 * {
@@ -109,13 +123,13 @@ textarea {
 .happyboat-goey-toast {
   min-width: min(92vw, 430px) !important;
   max-width: min(92vw, 430px) !important;
-   background: transparent !important;
+  background: transparent !important;
 }
 
 .happyboat-goey-toast .gooey-header,
 .happyboat-goey-toast .gooey-iconWrapper,
 .happyboat-goey-toast-title {
-  color: #ffffff !important;
+  color: springgreen !important;
 }
 
 .happyboat-goey-toast-title {
@@ -125,43 +139,46 @@ textarea {
 }
 
 .happyboat-goey-toast-description {
-  color: #ffffff !important;
+  color: hsl(var(--toast-text)) !important;
   font-size: 13px !important;
   line-height: 1.45 !important;
 }
 
 .happyboat-goey-toast-action {
-  border: 1px solid rgba(255, 255, 255, 0.28) !important;
-  background: rgba(255, 255, 255, 0.16) !important;
-  color: #ffffff !important;
+  border: 1px solid hsl(var(--toast-action-border)) !important;
+  background: hsl(var(--toast-action-bg)) !important;
+  color: hsl(var(--toast-text)) !important;
   min-height: 34px !important;
   padding-inline: 14px !important;
 }
 
 .happyboat-goey-toast-action:hover {
-  background: rgba(255, 255, 255, 0.22) !important;
+  background: hsl(var(--toast-text) / 0.22) !important;
+  
 }
 
 .happyboat-goey-toast-view-cart-action {
-  border-color: #639922 !important;
-  background: #879773 !important;
-  color: rgb(0, 255, 0) !important;
+  border-color: hsl(var(--primary)) !important;
+  background: hsl(var(--secondary)) !important;
+  color: white !important;
 }
 
 .happyboat-goey-toast-view-cart-action:hover {
  background: transparent !important;
+ border: 1px solid hsl(var(--toast-action-border)) !important;
+ color: springgreen !important;
 }
 
 .happyboat-goey-toast .gooey-progressWrapper {
-  background: rgba(255, 255, 255, 0.22) !important;
+  background: hsl(var(--toast-text) / 0.22) !important;
 }
 
 .happyboat-goey-toast .gooey-progressBar {
-  background: #ffffff !important;
+  background: hsl(var(--toast-progress)) !important;
 }
 
 .happyboat-goey-toast .gooey-closeButton {
-  color: #ffffff !important;
+  color: hsl(var(--toast-text)) !important;
 }
 
 @keyframes bottom-sheet-up {
