@@ -103,6 +103,7 @@ export default function CustomerReceipt({ orderId, accessToken = '' }) {
 
   const state = useMemo(() => receiptState(order), [order]);
   const backHref = order?.tableNumber ? `/t/${encodeURIComponent(order.tableNumber)}` : '/';
+  const receiptPdfHref = `/api/receipts/orders/${encodeURIComponent(orderId)}.pdf?accessToken=${encodeURIComponent(accessToken || '')}`;
 
   if (loading) {
     return (
@@ -150,11 +151,20 @@ export default function CustomerReceipt({ orderId, accessToken = '' }) {
             Back to order
           </a>
           {state.canExport ? (
-            <button
-              type="button"
-              onClick={exportPdf}
-              disabled={exporting}
-              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-70"
+            <a
+              href={receiptPdfHref}
+              download
+              aria-disabled={exporting}
+              onClick={(event) => {
+                event.preventDefault();
+                if (!exporting) {
+                  exportPdf();
+                }
+              }}
+              className={cn(
+                'inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90',
+                exporting ? 'pointer-events-none cursor-not-allowed opacity-70' : ''
+              )}
             >
               {exporting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -162,7 +172,7 @@ export default function CustomerReceipt({ orderId, accessToken = '' }) {
                 <Download className="h-4 w-4" />
               )}
               {exporting ? 'Exporting...' : 'Export PDF'}
-            </button>
+            </a>
           ) : null}
         </div>
 

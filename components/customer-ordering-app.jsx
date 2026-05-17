@@ -14,6 +14,7 @@ import { gooeyToast } from 'goey-toast';
 import {
   AlertCircle,
   BadgePercent,
+  BellRing,
   CheckCircle2,
   ChevronRight,
   ChevronUp,
@@ -35,11 +36,11 @@ import { QRCodeSVG } from 'qrcode.react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const PRICE_FILTERS = [
-  { value: 'all', label: 'All' },
-  { value: 'under_3', label: 'Under $3' },
-  { value: '3_5', label: '$3–$5' },
-  { value: '5_10', label: '$5–$10' },
-  { value: '10_plus', label: '$10+' },
+  { value: 'all', labelKey: 'allPrices' },
+  { value: 'under_3', labelKey: 'underThreeUsd' },
+  { value: '3_5', labelKey: 'threeToFiveUsd' },
+  { value: '5_10', labelKey: 'fiveToTenUsd' },
+  { value: '10_plus', labelKey: 'tenUsdPlus' },
 ];
 
 const CUSTOMER_STORAGE_TTL_MS = 12 * 60 * 60 * 1000;
@@ -73,6 +74,8 @@ export default function CustomerOrderingApp({ tableNumber }) {
   const [alertedOrderIds, setAlertedOrderIds] = useState([]);
   const [loadedStorageScope, setLoadedStorageScope] = useState('');
   const [openPaymentOrderId, setOpenPaymentOrderId] = useState(null);
+  const [checkingPaymentIds, setCheckingPaymentIds] = useState([]);
+  const [paymentVerificationMessage, setPaymentVerificationMessage] = useState('');
 
   const [now, setNow] = useState(Date.now());
   const [loading, setLoading] = useState(true);
@@ -82,6 +85,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
   const pollingInFlight = useRef({});
   const paidToastShown = useRef({});
+  const paymentErrorToastShown = useRef({});
   const cartRef = useRef(null);
   const mainRef = useRef(null);
   const customerAudioRef = useRef(null);
@@ -235,8 +239,11 @@ export default function CustomerOrderingApp({ tableNumber }) {
     setDeletedOrderIds(readCustomerStorage(storageKeys.deletedOrders, []));
     setAlertedOrderIds(readCustomerStorage(storageKeys.alertedOrders, []));
     paidToastShown.current = {};
+    paymentErrorToastShown.current = {};
     lastOrderStatusRef.current = {};
     setOpenPaymentOrderId(null);
+    setCheckingPaymentIds([]);
+    setPaymentVerificationMessage('');
     setLoadedStorageScope(storageKeys.cart);
   }, [
     storageKeys.alertedOrders,
@@ -335,14 +342,22 @@ export default function CustomerOrderingApp({ tableNumber }) {
             );
             notifyPaymentReceived(orderId);
           }
-        } catch {
+        } catch (error) {
+          if (openPaymentOrderId === orderId) {
+            const text = error.message || t('paymentCheckFailed');
+            setPaymentVerificationMessage(text);
+            if (!paymentErrorToastShown.current[payment.id]) {
+              paymentErrorToastShown.current[payment.id] = true;
+              showToast(text, 'error');
+            }
+          }
         } finally {
           pollingInFlight.current[payment.id] = false;
         }
       }
     }, 5000);
     return () => clearInterval(timer);
-  }, [payments, notifyPaymentReceived]);
+  }, [openPaymentOrderId, payments, notifyPaymentReceived, showToast, t]);
 
   useEffect(() => {
     const hasPending = Object.values(payments).some((p) => p && p.status === 'PENDING');
@@ -395,17 +410,26 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
     let cancelled = false;
     async function refreshVisibleOrderStatuses() {
-      for (const order of visibleOrders) {
-        if (!order?.id || !orderAccessToken(order)) continue;
-        try {
-          const updated = await api(customerOrderApiPath(order));
-          if (cancelled) return;
-          applyCustomerOrderUpdate(updated, { notify: true });
-        } catch (error) {
-          if (error.status === 404) {
-            deleteLocalOrder(order.id);
+      const trackedOrders = visibleOrders
+        .filter((order) => order?.id && orderAccessToken(order))
+        .map((order) => ({ id: order.id, accessToken: orderAccessToken(order) }));
+      if (trackedOrders.length === 0) return;
+
+      try {
+        const updates = await api('/api/customer/orders/statuses', {
+          method: 'POST',
+          body: JSON.stringify({ orders: trackedOrders }),
+        });
+        if (cancelled) return;
+        updates.forEach((updated) => {
+          if (updated?.notFound && updated?.id) {
+            deleteLocalOrder(updated.id);
+            return;
           }
-        }
+          applyCustomerOrderUpdate(updated, { notify: true });
+        });
+      } catch (error) {
+        setMessage(error.message || t('orderStatusUpdated'));
       }
     }
 
@@ -416,11 +440,22 @@ export default function CustomerOrderingApp({ tableNumber }) {
       clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleOrders]);
+  }, [visibleOrders, t]);
 
   function secsRemaining(payment) {
     if (!payment?.expiredAt) return 0;
     return Math.max(0, Math.floor((new Date(payment.expiredAt).getTime() - now) / 1000));
+  }
+
+  function setPaymentChecking(paymentId, checking) {
+    if (!paymentId) return;
+    setCheckingPaymentIds((current) =>
+      checking
+        ? current.includes(paymentId)
+          ? current
+          : [...current, paymentId]
+        : current.filter((id) => id !== paymentId)
+    );
   }
 
   function applyCustomerOrderUpdate(updated, options = {}) {
@@ -586,6 +621,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
 
   async function openPaymentFor(orderId) {
     setMessage('');
+    setPaymentVerificationMessage('');
     unlockCustomerAlert();
     const payment = payments[orderId];
     const needsNewQr =
@@ -607,6 +643,9 @@ export default function CustomerOrderingApp({ tableNumber }) {
   async function refreshPaymentFor(orderId) {
     const payment = payments[orderId];
     if (!payment) return;
+    setPaymentVerificationMessage('');
+    delete paymentErrorToastShown.current[payment.id];
+    setPaymentChecking(payment.id, true);
     try {
       const verified = await api(`/api/payments/${payment.id}/verify`, { method: 'POST' });
       setPayments((prev) => ({ ...prev, [orderId]: verified }));
@@ -624,14 +663,25 @@ export default function CustomerOrderingApp({ tableNumber }) {
           )
         );
         notifyPaymentReceived(orderId);
+      } else if (verified.transactions?.[0]?.responseMessage) {
+        setPaymentVerificationMessage(verified.transactions[0].responseMessage);
       }
-    } catch {}
+    } catch (error) {
+      const text = error.message || t('paymentCheckFailed');
+      setPaymentVerificationMessage(text);
+      setMessage(text);
+      showToast(text, 'error');
+    } finally {
+      setPaymentChecking(payment.id, false);
+    }
   }
 
   async function cancelPaymentFor(orderId) {
     if (!orderId) return;
+    if (!window.confirm(t('confirmCancelPayment'))) return;
     const order = orders.find((entry) => entry.id === orderId);
     setMessage('');
+    setPaymentVerificationMessage('');
     try {
       const cancelled = await api(customerOrderApiPath(order || { id: orderId }, '/cancel'), { method: 'PATCH' });
       lastOrderStatusRef.current[orderId] = cancelled.status;
@@ -662,31 +712,34 @@ export default function CustomerOrderingApp({ tableNumber }) {
   }
 
   async function alertStaffFor(orderId) {
-    if (!orderId) return;
-    const order = orders.find((entry) => entry.id === orderId);
-    if (!canRequestStaffAlert(order, now) || alertedOrderIds.includes(orderId)) return;
+    const order = orderId ? orders.find((entry) => entry.id === orderId) : latestCustomerOrder(visibleOrders);
+    const alertKey = orderId || 'table';
+    if (alertingOrderId || (orderId && alertedOrderIds.includes(orderId))) return;
     setMessage('');
-    setAlertingOrderId(orderId);
+    setAlertingOrderId(alertKey);
     try {
-      await api(customerOrderApiPath(order, '/alert'), { method: 'POST' });
-      setAlertedOrderIds((prev) => (prev.includes(orderId) ? prev : [...prev, orderId]));
-      showToast(t('customerAlertSent'));
+      const payload = order?.id && orderAccessToken(order)
+        ? { orderId: order.id, accessToken: orderAccessToken(order) }
+        : {};
+      const staffRequest = await api(`/api/customer/tables/${encodeURIComponent(tableNumber)}/call-staff`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      if (orderId) {
+        setAlertedOrderIds((prev) => (prev.includes(orderId) ? prev : [...prev, orderId]));
+      }
+      const text = staffRequest?.duplicate ? t('callStaffAlreadySent') : t('callStaffSent');
+      setMessage(text);
+      showToast(text);
     } catch (error) {
-      showToast(error.message || t('customerAlertFailed'), 'error');
+      showToast(error.message || t('callStaffFailed'), 'error');
     } finally {
       setAlertingOrderId(null);
     }
   }
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-3">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
-          <Utensils className="h-6 w-6 animate-pulse text-primary" />
-        </div>
-        <p className="text-sm font-medium text-muted-foreground">{t('loadingMenu')}</p>
-      </div>
-    );
+    return <CustomerOrderingSkeleton label={t('loadingMenu')} />;
   }
 
   const openModalOrder = openPaymentOrderId
@@ -721,6 +774,18 @@ export default function CustomerOrderingApp({ tableNumber }) {
           <div className="flex items-center gap-2">
             <LanguageToggle />
             <ThemeToggle />
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 rounded-xl px-3 text-xs font-semibold"
+              disabled={alertingOrderId === 'table'}
+              onClick={() => alertStaffFor(null)}
+            >
+              <BellRing className="h-4 w-4" />
+              <span className="hidden sm:inline">
+                {alertingOrderId === 'table' ? t('callingStaff') : t('callStaff')}
+              </span>
+            </Button>
             <div className="hidden h-8 items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-3 text-sm font-semibold sm:flex">
               <Utensils className="h-3.5 w-3.5 text-primary" />
               {table?.tableNumber || tableLabel}
@@ -802,7 +867,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                       : 'border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground'
                   )}
                 >
-                  {opt.label}
+                  {t(opt.labelKey)}
                 </button>
               ))}
             </div>
@@ -811,7 +876,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
           {/* Result count */}
           {filteredItems.length > 0 ? (
             <p className="mb-3 text-xs font-medium text-muted-foreground">
-              {filteredItems.length} {filteredItems.length === 1 ? 'dish' : 'dishes'}
+              {t('dishesCount').replace('{count}', filteredItems.length)}
             </p>
           ) : null}
 
@@ -892,7 +957,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                   <Button
                     type="button"
                     variant="outline"
-                    className="h-9 shrink-0 rounded-xl px-3 text-xs"
+                    className="h-11 shrink-0 rounded-xl px-3 text-xs"
                     disabled={promoState.status === 'checking'}
                     onClick={applyPromoCode}
                   >
@@ -1005,7 +1070,6 @@ export default function CustomerOrderingApp({ tableNumber }) {
               order.status === 'EXPIRED' ||
               payment?.status === 'EXPIRED' ||
               (payment?.status === 'PENDING' && secs === 0);
-            const canAlertStaff = canRequestStaffAlert(order, now);
             const staffAlertSent = alertedOrderIds.includes(order.id);
 
             return (
@@ -1080,7 +1144,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                         {t('orderCancelled')}
                       </div>
                       <Button
-                        className="h-9 w-full rounded-xl text-sm"
+                        className="h-11 w-full rounded-xl text-sm"
                         variant="outline"
                         onClick={() => deleteLocalOrder(order.id)}
                       >
@@ -1098,21 +1162,19 @@ export default function CustomerOrderingApp({ tableNumber }) {
                         <Clock className="h-3.5 w-3.5 shrink-0" />
                         {t('paidMinutes')} {paidWaitingMinutes(order, payment, now)}m
                       </div>
-                      {canAlertStaff || staffAlertSent ? (
-                        <Button
-                          className="h-9 w-full rounded-xl text-sm"
-                          variant="secondary"
-                          disabled={staffAlertSent || alertingOrderId === order.id}
-                          onClick={() => alertStaffFor(order.id)}
-                        >
-                          <AlertCircle className="h-3.5 w-3.5" />
-                          {staffAlertSent
-                            ? t('customerAlertSentShort')
-                            : alertingOrderId === order.id
-                              ? t('checking')
-                              : t('alertStaff')}
-                        </Button>
-                      ) : null}
+                      <Button
+                        className="h-11 w-full rounded-xl text-sm"
+                        variant="secondary"
+                        disabled={staffAlertSent || alertingOrderId === order.id}
+                        onClick={() => alertStaffFor(order.id)}
+                      >
+                        <BellRing className="h-3.5 w-3.5" />
+                        {staffAlertSent
+                          ? t('callStaffSentShort')
+                          : alertingOrderId === order.id
+                            ? t('checking')
+                            : t('callStaff')}
+                      </Button>
                       <a
                         href={receiptHref(order)}
                         target="_blank"
@@ -1138,7 +1200,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                       ) : null}
                       <div className="grid gap-2">
                         <Button
-                          className="h-9 w-full rounded-xl text-sm"
+                          className="h-11 w-full rounded-xl text-sm"
                           variant="secondary"
                           onClick={() => openPaymentFor(order.id)}
                         >
@@ -1146,7 +1208,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
                           {payment ? t('viewPayment') : t('payWithBakong')}
                         </Button>
                         <Button
-                          className="h-9 w-full rounded-xl text-sm"
+                          className="h-11 w-full rounded-xl text-sm"
                           variant="outline"
                           onClick={() => cancelPaymentFor(order.id)}
                         >
@@ -1189,7 +1251,7 @@ export default function CustomerOrderingApp({ tableNumber }) {
             <span className="flex items-center gap-2.5 text-sm font-semibold">
               <ShoppingBag className="h-4 w-4" />
               {cart.length > 0
-                ? `${cart.length} ${cart.length === 1 ? 'item' : 'items'}`
+                ? t('cartItemCount').replace('{count}', cart.length)
                 : t('viewCart')}
             </span>
             {cart.length > 0 ? (
@@ -1243,11 +1305,98 @@ export default function CustomerOrderingApp({ tableNumber }) {
           order={openModalOrder}
           payment={openModalPayment}
           secondsRemaining={secsRemaining(openModalPayment)}
+          checking={checkingPaymentIds.includes(openModalPayment.id)}
+          verificationMessage={paymentVerificationMessage}
           onClose={() => setOpenPaymentOrderId(null)}
           onRefresh={() => refreshPaymentFor(openPaymentOrderId)}
           onReissue={() => openPaymentFor(openPaymentOrderId)}
         />
       ) : null}
+    </main>
+  );
+}
+
+function CustomerOrderingSkeleton({ label }) {
+  return (
+    <main className="min-h-screen overflow-x-hidden bg-background pb-24 lg:pb-0">
+      <header className="fixed left-0 right-0 top-0 z-20 border-b border-border/60 bg-background/95 shadow-sm backdrop-blur-md">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <div className="h-11 w-11 animate-pulse rounded-xl bg-muted" />
+            <div className="space-y-2">
+              <div className="h-4 w-28 animate-pulse rounded bg-muted" />
+              <div className="h-3 w-20 animate-pulse rounded bg-muted" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <div className="h-11 w-20 animate-pulse rounded-xl bg-muted" />
+            <div className="h-11 w-11 animate-pulse rounded-xl bg-muted" />
+          </div>
+        </div>
+      </header>
+      <div className="h-[69px]" aria-hidden="true" />
+
+      <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[1fr_360px]">
+        <section className="min-w-0">
+          <div className="mb-5 space-y-3">
+            <div className="grid gap-2.5 sm:grid-cols-[1fr_200px]">
+              <div className="h-10 animate-pulse rounded-xl bg-muted" />
+              <div className="h-10 animate-pulse rounded-xl bg-muted" />
+            </div>
+            <div className="flex gap-1.5">
+              {[0, 1, 2, 3].map((index) => (
+                <div key={index} className="h-8 w-20 animate-pulse rounded-full bg-muted" />
+              ))}
+            </div>
+          </div>
+          <p className="mb-3 text-xs font-medium text-muted-foreground">{label}</p>
+          <div className="grid auto-rows-fr grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-3">
+            {[0, 1, 2, 3, 4, 5].map((index) => (
+              <div
+                key={index}
+                className="flex min-h-[250px] flex-col overflow-hidden rounded-xl border border-border/60 bg-card sm:rounded-2xl"
+              >
+                <div className="aspect-square animate-pulse bg-muted sm:aspect-[16/10]" />
+                <div className="flex flex-1 flex-col gap-2 p-3.5">
+                  <div className="h-4 w-4/5 animate-pulse rounded bg-muted" />
+                  <div className="h-3 w-full animate-pulse rounded bg-muted" />
+                  <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
+                  <div className="mt-auto flex items-center justify-between">
+                    <div className="space-y-1">
+                      <div className="h-4 w-16 animate-pulse rounded bg-muted" />
+                      <div className="h-3 w-20 animate-pulse rounded bg-muted" />
+                    </div>
+                    <div className="h-11 w-11 animate-pulse rounded-xl bg-muted" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <aside className="hidden space-y-4 lg:block lg:sticky lg:top-24 lg:self-start">
+          <Card className="overflow-hidden rounded-2xl border-border/60 shadow-sm">
+            <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-4 py-3">
+              <div className="h-4 w-28 animate-pulse rounded bg-muted" />
+              <div className="h-5 w-5 animate-pulse rounded-full bg-muted" />
+            </div>
+            <CardContent className="space-y-4 p-4">
+              {[0, 1].map((index) => (
+                <div key={index} className="flex gap-3 rounded-2xl border border-border/60 p-4">
+                  <div className="h-14 w-14 animate-pulse rounded-xl bg-muted" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 w-4/5 animate-pulse rounded bg-muted" />
+                    <div className="h-3 w-1/2 animate-pulse rounded bg-muted" />
+                    <div className="h-11 w-32 animate-pulse rounded-xl bg-muted" />
+                  </div>
+                </div>
+              ))}
+              <div className="h-24 animate-pulse rounded-2xl bg-muted" />
+              <div className="h-14 animate-pulse rounded-2xl bg-muted" />
+            </CardContent>
+          </Card>
+        </aside>
+      </div>
     </main>
   );
 }
@@ -1275,7 +1424,7 @@ function MenuCard({ item, onSelect }) {
       data-scroll-reveal
       className={cn(
         'scroll-reveal group flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-md sm:rounded-2xl',
-        item.available ? 'cursor-pointer active:scale-[0.99]' : 'cursor-not-allowed opacity-75'
+        item.available ? 'cursor-pointer active:scale-[0.99]' : 'cursor-not-allowed grayscale-[35%]'
       )}
     >
       {/* Image */}
@@ -1289,7 +1438,7 @@ function MenuCard({ item, onSelect }) {
         {!item.available ? (
           <div className="absolute inset-0 flex items-center justify-center bg-background/70 backdrop-blur-sm">
             <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-semibold text-muted-foreground sm:px-3 sm:text-xs">
-              Unavailable
+              {t('unavailable')}
             </span>
           </div>
         ) : null}
@@ -1333,14 +1482,14 @@ function MenuCard({ item, onSelect }) {
             }}
             disabled={!item.available}
             className={cn(
-              'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-all sm:h-8 sm:w-8 sm:rounded-xl',
+              'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-all',
               item.available
                 ? 'bg-primary text-primary-foreground shadow-sm hover:opacity-90 active:scale-95'
                 : 'cursor-not-allowed bg-muted text-muted-foreground'
             )}
             aria-label={`${t('addToCart')} ${item.name}`}
           >
-            <Plus className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+            <Plus className="h-4 w-4" />
           </button>
         </div>
       </div>
@@ -1350,8 +1499,8 @@ function MenuCard({ item, onSelect }) {
 
 function CartLineItem({ item, onDecrease, onIncrease, onRemove, controlSize = 'sm' }) {
   const { t } = useLanguage();
-  const buttonSize = controlSize === 'md' ? 'h-7 w-7' : 'h-6 w-6';
-  const quantityWidth = controlSize === 'md' ? 'w-6' : 'w-5';
+  const buttonSize = controlSize === 'md' ? 'h-11 w-11' : 'h-10 w-10 sm:h-11 sm:w-11';
+  const quantityWidth = controlSize === 'md' ? 'w-7' : 'w-6';
 
   return (
     <div className="relative flex gap-3 rounded-2xl border border-border/60 bg-card p-4 pr-10">
@@ -1361,7 +1510,7 @@ function CartLineItem({ item, onDecrease, onIncrease, onRemove, controlSize = 's
       <button
         onClick={onRemove}
         aria-label={t('removeItem')}
-        className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
+        className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
       >
         <Trash2 className="h-4 w-4" />
       </button>
@@ -1391,7 +1540,7 @@ function CartLineItem({ item, onDecrease, onIncrease, onRemove, controlSize = 's
               )}
               aria-label={t('decrease')}
             >
-              <Minus className="h-3 w-3" />
+                <Minus className="h-4 w-4" />
             </button>
             <span className={cn('text-center text-sm font-semibold', quantityWidth)}>
               {item.quantity}
@@ -1404,7 +1553,7 @@ function CartLineItem({ item, onDecrease, onIncrease, onRemove, controlSize = 's
               )}
               aria-label={t('increase')}
             >
-              <Plus className="h-3 w-3" />
+                <Plus className="h-4 w-4" />
             </button>
           </div>
           <span className="shrink-0 text-sm font-semibold">{usd(item.lineUsd)}</span>
@@ -1522,7 +1671,7 @@ function MobileCartSheet({
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 pb-4">
           <div className="space-y-2">
             {cart.length === 0 ? (
               <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-muted/30 py-8 text-center">
@@ -1556,7 +1705,7 @@ function MobileCartSheet({
               <Button
                 type="button"
                 variant="outline"
-                className="h-10 w-full rounded-xl px-3 text-xs"
+                className="h-11 w-full rounded-xl px-3 text-xs"
                 disabled={promoState.status === 'checking'}
                 onClick={onApplyPromo}
               >
@@ -1598,49 +1747,6 @@ function MobileCartSheet({
             ) : null}
           </div>
 
-          <div className="rounded-2xl bg-muted/40 px-4 py-4">
-            <div className="mb-1 flex items-baseline justify-between">
-              <span className="text-xs text-muted-foreground">{t('subtotal')}</span>
-              <span className="text-sm font-semibold">{usd(totals.subtotalUsd)}</span>
-            </div>
-            {totals.discountUsd > 0 ? (
-              <div className="mb-1 flex items-baseline justify-between text-primary">
-                <span className="text-xs">
-                  {t('discount')}
-                  {promoState.detail?.code ? ` (${promoState.detail.code})` : ''}
-                </span>
-                <span className="text-sm font-semibold">-{usd(totals.discountUsd)}</span>
-              </div>
-            ) : null}
-            <div className="my-2 border-t border-border/60" />
-            <div className="flex items-baseline justify-between">
-              <span className="text-sm text-muted-foreground">{t('total')}</span>
-              <span className="text-xl font-bold">{usd(totals.totalUsd)}</span>
-            </div>
-            <div className="mt-0.5 text-right text-xs text-muted-foreground">
-              {khr(totals.totalKhr)}
-            </div>
-          </div>
-
-          <Button
-            className="h-14 w-full rounded-2xl text-base font-bold shadow-sm"
-            disabled={!cart.length || totals.totalUsd <= 0 || submitting}
-            onClick={onSubmitOrder}
-          >
-            {submitting ? (
-              <span className="flex items-center gap-2">
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
-                {t('placingOrder')}
-              </span>
-            ) : (
-              <span className="flex w-full items-center gap-2">
-                <ShoppingBag className="h-4 w-4" />
-                {t('placeOrder')}
-                {cart.length > 0 ? <span className="ml-auto">{usd(totals.totalUsd)}</span> : null}
-              </span>
-            )}
-          </Button>
-
           {orders.length ? (
             <div className="space-y-3 border-t border-border/60 pt-4">
               <h3 className="text-sm font-bold">{t('orderStatus')}</h3>
@@ -1657,7 +1763,6 @@ function MobileCartSheet({
                   order.status === 'EXPIRED' ||
                   payment?.status === 'EXPIRED' ||
                   (payment?.status === 'PENDING' && secs === 0);
-                const canAlertStaff = canRequestStaffAlert(order, now);
                 const staffAlertSent = alertedOrderIds.includes(order.id);
                 return (
                   <div
@@ -1730,7 +1835,7 @@ function MobileCartSheet({
                             {t('orderCancelled')}
                           </div>
                           <Button
-                            className="h-9 w-full rounded-xl text-sm"
+                            className="h-11 w-full rounded-xl text-sm"
                             variant="outline"
                             onClick={() => onDeleteOrder(order.id)}
                           >
@@ -1744,21 +1849,19 @@ function MobileCartSheet({
                             <Clock className="h-3.5 w-3.5 shrink-0" />
                             {t('paidMinutes')} {paidWaitingMinutes(order, payment, now)}m
                           </div>
-                          {canAlertStaff || staffAlertSent ? (
-                            <Button
-                              className="h-9 w-full rounded-xl text-sm"
-                              variant="secondary"
-                              disabled={staffAlertSent || alertingOrderId === order.id}
-                              onClick={() => onAlertStaff(order.id)}
-                            >
-                              <AlertCircle className="h-3.5 w-3.5" />
-                              {staffAlertSent
-                                ? t('customerAlertSentShort')
-                                : alertingOrderId === order.id
-                                  ? t('checking')
-                                  : t('alertStaff')}
-                            </Button>
-                          ) : null}
+                          <Button
+                            className="h-11 w-full rounded-xl text-sm"
+                            variant="secondary"
+                            disabled={staffAlertSent || alertingOrderId === order.id}
+                            onClick={() => onAlertStaff(order.id)}
+                          >
+                            <BellRing className="h-3.5 w-3.5" />
+                            {staffAlertSent
+                              ? t('callStaffSentShort')
+                              : alertingOrderId === order.id
+                                ? t('checking')
+                                : t('callStaff')}
+                          </Button>
                           <a
                             href={receiptHref(order)}
                             target="_blank"
@@ -1777,7 +1880,7 @@ function MobileCartSheet({
                             </div>
                           ) : null}
                           <Button
-                            className="h-9 w-full rounded-xl text-sm"
+                            className="h-11 w-full rounded-xl text-sm"
                             variant="secondary"
                             onClick={() => {
                               onClose();
@@ -1788,7 +1891,7 @@ function MobileCartSheet({
                             {payment ? t('viewPayment') : t('payWithBakong')}
                           </Button>
                           <Button
-                            className="h-9 w-full rounded-xl text-sm"
+                            className="h-11 w-full rounded-xl text-sm"
                             variant="outline"
                             onClick={() => onCancelPayment(order.id)}
                           >
@@ -1804,6 +1907,51 @@ function MobileCartSheet({
             </div>
           ) : null}
         </div>
+
+        <div className="border-t border-border/60 bg-card/95 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] backdrop-blur">
+          <div className="mb-3 rounded-2xl bg-muted/40 px-4 py-3">
+            <div className="mb-1 flex items-baseline justify-between">
+              <span className="text-xs text-muted-foreground">{t('subtotal')}</span>
+              <span className="text-sm font-semibold">{usd(totals.subtotalUsd)}</span>
+            </div>
+            {totals.discountUsd > 0 ? (
+              <div className="mb-1 flex items-baseline justify-between text-primary">
+                <span className="text-xs">
+                  {t('discount')}
+                  {promoState.detail?.code ? ` (${promoState.detail.code})` : ''}
+                </span>
+                <span className="text-sm font-semibold">-{usd(totals.discountUsd)}</span>
+              </div>
+            ) : null}
+            <div className="my-2 border-t border-border/60" />
+            <div className="flex items-baseline justify-between">
+              <span className="text-sm text-muted-foreground">{t('total')}</span>
+              <span className="text-xl font-bold">{usd(totals.totalUsd)}</span>
+            </div>
+            <div className="mt-0.5 text-right text-xs text-muted-foreground">
+              {khr(totals.totalKhr)}
+            </div>
+          </div>
+
+          <Button
+            className="h-14 w-full rounded-2xl text-base font-bold shadow-sm"
+            disabled={!cart.length || totals.totalUsd <= 0 || submitting}
+            onClick={onSubmitOrder}
+          >
+            {submitting ? (
+              <span className="flex items-center gap-2">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
+                {t('placingOrder')}
+              </span>
+            ) : (
+              <span className="flex w-full items-center gap-2">
+                <ShoppingBag className="h-4 w-4" />
+                {t('placeOrder')}
+                {cart.length > 0 ? <span className="ml-auto">{usd(totals.totalUsd)}</span> : null}
+              </span>
+            )}
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -1815,6 +1963,7 @@ function CustomerOrderProgress({ status }) {
     { status: 'PENDING_PAYMENT', label: t('awaitingPayment') },
     { status: 'RECEIVED', label: t('receivedByStaff') },
     { status: 'PREPARING', label: t('acceptedPreparing') },
+    { status: 'READY', label: t('readyForPickup') },
     { status: 'COMPLETED', label: t('orderComplete') },
   ];
   const activeIndex = customerStatusStepIndex(status);
@@ -1828,7 +1977,7 @@ function CustomerOrderProgress({ status }) {
   }
 
   return (
-    <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+    <div className="grid grid-cols-5 gap-1.5">
       {steps.map((step, index) => {
         const done = activeIndex >= index;
         const current = activeIndex === index;
@@ -1836,7 +1985,7 @@ function CustomerOrderProgress({ status }) {
           <div
             key={step.status}
             className={cn(
-              'min-w-[68px] rounded-lg border px-2 py-1.5 text-center text-[10px] font-semibold',
+              'min-w-0 rounded-lg border px-1.5 py-1.5 text-center text-[10px] font-semibold leading-tight',
               done
                 ? 'border-primary/30 bg-primary/10 text-primary'
                 : 'border-border bg-muted/30 text-muted-foreground',
@@ -1852,7 +2001,16 @@ function CustomerOrderProgress({ status }) {
 }
 
 /* ── PaymentModal ─────────────────────────────────────────── */
-function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, onReissue }) {
+function PaymentModal({
+  order,
+  payment,
+  secondsRemaining,
+  checking = false,
+  verificationMessage = '',
+  onClose,
+  onRefresh,
+  onReissue,
+}) {
   const { t } = useLanguage();
   const isPaid = payment.status === 'PAID';
   const isExpired = payment.status === 'EXPIRED' || secondsRemaining === 0;
@@ -1887,7 +2045,7 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
           {!isPaid && !isExpired ? (
             <>
               <div
-                className="mx-auto w-full max-w-[292px] overflow-hidden rounded-2xl border border-border/60 bg-white text-slate-950 shadow-sm"
+                className="mx-auto w-full max-w-[340px] overflow-hidden rounded-2xl border border-border/60 bg-white text-slate-950 shadow-sm"
                 data-payment-qr={payment.id}
               >
                 <div className="flex h-14 items-center justify-center bg-[#e1232e] px-5">
@@ -1898,7 +2056,7 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
                   <p className="text-xs text-slate-500">{payment.paymentNumber}</p>
                 </div>
                 <div className="flex justify-center px-5 pb-5 pt-4">
-                  <QRCodeSVG value={payment.khqrString} size={220} includeMargin={false} level="M" />
+                  <QRCodeSVG value={payment.khqrString} size={264} includeMargin={false} level="M" />
                 </div>
               </div>
             </>
@@ -1927,7 +2085,12 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
                   : 'bg-muted text-muted-foreground'
             )}
           >
-            {isPaid ? (
+            {checking ? (
+              <span className="flex items-center justify-center gap-2">
+                <RefreshCw className="h-4 w-4 animate-spin" />
+                {t('checkingPayment')}
+              </span>
+            ) : isPaid ? (
               t('paymentConfirmed')
             ) : isExpired ? (
               t('qrExpired')
@@ -1938,6 +2101,25 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
               </span>
             )}
           </div>
+
+          {!isPaid && !isExpired ? (
+            <div className="rounded-xl border border-border/60 bg-muted/35 px-4 py-3 text-left text-xs leading-relaxed text-muted-foreground">
+              <div className="flex items-start gap-2">
+                <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                <span>{t('paymentAutoCheckHint')}</span>
+              </div>
+              <div className="mt-2 flex items-start gap-2">
+                <Zap className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                <span>{t('scanQrHelp')}</span>
+              </div>
+            </div>
+          ) : null}
+
+          {verificationMessage && !isPaid ? (
+            <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3 text-sm text-destructive">
+              {verificationMessage}
+            </div>
+          ) : null}
 
           {isPaid ? (
             <a
@@ -1953,7 +2135,7 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
               <Button
                 type="button"
                 variant="outline"
-                className="h-10 rounded-xl text-sm"
+                className="h-11 rounded-xl text-sm"
                 onClick={() => downloadPaymentQrImage(order, payment, t)}
               >
                 <Download className="h-4 w-4" />
@@ -1962,31 +2144,40 @@ function PaymentModal({ order, payment, secondsRemaining, onClose, onRefresh, on
               <Button
                 type="button"
                 variant="outline"
-                className="h-10 rounded-xl text-sm"
+                className="h-11 rounded-xl text-sm"
+                disabled={checking}
                 onClick={onRefresh}
               >
-                {t('checkPaymentStatus')}
+                {checking ? <RefreshCw className="h-4 w-4 animate-spin" /> : null}
+                {checking ? t('checking') : t('refreshPaymentNow')}
               </Button>
             </div>
           ) : (
-            <div className="grid gap-2 sm:grid-cols-2">
+            <div className="space-y-3">
+              <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3 text-sm text-destructive">
+                {t('expiredQrHelp')}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
               <Button
                 type="button"
                 variant="outline"
-                className="h-10 rounded-xl text-sm"
+                className="h-11 rounded-xl text-sm"
+                disabled={checking}
                 onClick={onRefresh}
               >
-                {t('checkPaymentStatus')}
+                {checking ? <RefreshCw className="h-4 w-4 animate-spin" /> : null}
+                {checking ? t('checking') : t('refreshPaymentNow')}
               </Button>
               <Button
                 type="button"
                 variant="secondary"
-                className="h-10 rounded-xl text-sm"
+                className="h-11 rounded-xl text-sm"
                 onClick={onReissue}
               >
                 <RefreshCw className="h-4 w-4" />
                 {t('generateNewQr')}
               </Button>
+              </div>
             </div>
           )}
         </div>
@@ -2094,7 +2285,7 @@ function CustomizeItem({ item, addons, sizeLevels = [], options, onClose, onAdd 
       <div className="flex items-center gap-2">
         <button
           onClick={() => setQuantity(Math.max(1, quantity - 1))}
-          className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
+          className="flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
           aria-label={t('decrease')}
         >
           <Minus className="h-4 w-4" />
@@ -2102,7 +2293,7 @@ function CustomizeItem({ item, addons, sizeLevels = [], options, onClose, onAdd 
         <span className="w-8 text-center text-base font-bold">{quantity}</span>
         <button
           onClick={() => setQuantity(quantity + 1)}
-          className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
+          className="flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
           aria-label={t('increase')}
         >
           <Plus className="h-4 w-4" />
@@ -2250,12 +2441,12 @@ function CustomizeItem({ item, addons, sizeLevels = [], options, onClose, onAdd 
                               e.preventDefault();
                               changeAddonQuantity(addon.id, -1);
                             }}
-                            className="flex h-6 w-6 items-center justify-center rounded border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
+                            className="flex h-11 w-11 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
                             aria-label={t('decrease')}
                           >
-                            <Minus className="h-3 w-3" />
+                            <Minus className="h-4 w-4" />
                           </button>
-                          <span className="w-5 text-center text-xs font-semibold">
+                          <span className="w-7 text-center text-sm font-semibold">
                             {addonItem?.quantity || 1}
                           </span>
                           <button
@@ -2264,10 +2455,10 @@ function CustomizeItem({ item, addons, sizeLevels = [], options, onClose, onAdd 
                               e.preventDefault();
                               changeAddonQuantity(addon.id, 1);
                             }}
-                            className="flex h-6 w-6 items-center justify-center rounded border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
+                            className="flex h-11 w-11 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
                             aria-label={t('increase')}
                           >
-                            <Plus className="h-3 w-3" />
+                            <Plus className="h-4 w-4" />
                           </button>
                         </div>
                       ) : null}
@@ -2367,6 +2558,12 @@ function customerStorageKey(tableNumber, bucket) {
 
 function orderAccessToken(order) {
   return order?.customerAccessToken || order?.accessToken || '';
+}
+
+function latestCustomerOrder(orders = []) {
+  return [...orders]
+    .filter((order) => order?.id)
+    .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0))[0];
 }
 
 function customerOrderApiPath(order, suffix = '') {
@@ -2544,8 +2741,10 @@ function customerStatusStepIndex(status) {
       return 1;
     case 'PREPARING':
       return 2;
-    case 'COMPLETED':
+    case 'READY':
       return 3;
+    case 'COMPLETED':
+      return 4;
     default:
       return -1;
   }
@@ -2560,6 +2759,8 @@ function customerStatusLabel(status, t) {
       return t('receivedByStaff');
     case 'PREPARING':
       return t('acceptedPreparing');
+    case 'READY':
+      return t('readyForPickup');
     case 'COMPLETED':
       return t('orderComplete');
     case 'CANCELLED':

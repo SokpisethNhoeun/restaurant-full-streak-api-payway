@@ -1,7 +1,6 @@
 import "./globals.css";
 import "goey-toast/styles.css";
 import { GoeyToastProvider } from "@/components/goey-toast-provider";
-import { AppHeroUIProvider } from "@/components/heroui-provider";
 import { LanguageProvider } from "@/components/language-provider";
 import { PwaController } from "@/components/pwa-controller";
 import { Noto_Sans_Khmer } from "next/font/google";
@@ -68,13 +67,11 @@ export default function RootLayout({ children }) {
     <html lang="en" className={notoKhmer.variable} suppressHydrationWarning>
       <body>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-        <AppHeroUIProvider>
-          <LanguageProvider>
-            {children}
-            <PwaController />
-            <GoeyToastProvider />
-          </LanguageProvider>
-        </AppHeroUIProvider>
+        <LanguageProvider>
+          {children}
+          <PwaController />
+          <GoeyToastProvider />
+        </LanguageProvider>
       </body>
     </html>
   );

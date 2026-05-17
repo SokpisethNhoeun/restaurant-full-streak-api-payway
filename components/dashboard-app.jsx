@@ -60,6 +60,7 @@ import {
   CreditCard,
   Download,
   Filter,
+  Home,
   LogIn,
   LogOut,
   Pencil,
@@ -214,7 +215,7 @@ export default function DashboardApp() {
   const [signedIn, setSignedIn] = useState(false);
   const [username, setUsername] = useState('');
   const [userRole, setUserRole] = useState(null);
-  const [tab, setTab] = useState('orders');
+  const [tab, setTab] = useState('home');
   const [merchantDialogOpen, setMerchantDialogOpen] = useState(false);
   const [merchantOtpSession, setMerchantOtpSession] = useState(null);
   const [merchantOtpCode, setMerchantOtpCode] = useState('');
@@ -237,6 +238,9 @@ export default function DashboardApp() {
   const [tables, setTables] = useState([]);
   const [payments, setPayments] = useState([]);
   const [promos, setPromos] = useState([]);
+  const [dashboardSummary, setDashboardSummary] = useState(null);
+  const [callStaffRequests, setCallStaffRequests] = useState([]);
+  const [resolvingCallStaffIds, setResolvingCallStaffIds] = useState([]);
   const [analytics, setAnalytics] = useState(null);
   const [analyticsError, setAnalyticsError] = useState('');
   const [message, setMessage] = useState('');
@@ -254,10 +258,12 @@ export default function DashboardApp() {
   const audioRef = useRef(null);
   const ordersRef = useRef([]);
   const paymentsRef = useRef([]);
+  const liveStateRef = useRef(liveState);
   const selectedOrderRef = useRef(null);
   const notifiedOrderToastRef = useRef(new Set());
   const notifiedPaymentToastRef = useRef(new Set());
   const notifiedCustomerAlertRef = useRef(new Set());
+  const notifiedCallStaffRef = useRef(new Set());
   const otpInputRefs = useRef([]);
   const otpAutoSubmitRef = useRef('');
 
@@ -272,6 +278,10 @@ export default function DashboardApp() {
   useEffect(() => {
     paymentsRef.current = payments;
   }, [payments]);
+
+  useEffect(() => {
+    liveStateRef.current = liveState;
+  }, [liveState]);
 
   useEffect(() => {
     const hasSessionHint = window.localStorage.getItem(DASHBOARD_SESSION_HINT) === '1';
@@ -368,6 +378,13 @@ export default function DashboardApp() {
             loadOrders();
           }
         });
+        client.subscribe('/topic/call-staff', (frame) => {
+          try {
+            applyCallStaffUpdate(JSON.parse(frame.body));
+          } catch {
+            loadCallStaffRequests();
+          }
+        });
       },
       onWebSocketClose: () => setLiveState('polling'),
       onWebSocketError: () => setLiveState('polling'),
@@ -376,7 +393,9 @@ export default function DashboardApp() {
 
     client.activate();
     const pollTimer = window.setInterval(() => {
-      pollLiveData();
+      if (liveStateRef.current !== 'connected') {
+        pollLiveData();
+      }
     }, 10000);
 
     return () => {
@@ -412,7 +431,7 @@ export default function DashboardApp() {
   useEffect(() => {
     if (userRole === 'SUPER_ADMIN') return;
     if (tab === 'accounts') {
-      setTab('orders');
+      setTab('home');
     }
     if (merchantDialogOpen) {
       closeMerchantDialog();
@@ -425,6 +444,7 @@ export default function DashboardApp() {
       return await api(path, {
         ...options,
         credentials: 'include',
+        cache: options.cache ?? 'no-store',
         headers: dashboardAuthHeaders({ ...(options.headers || {}) }),
       });
     } catch (error) {
@@ -543,7 +563,7 @@ export default function DashboardApp() {
       setSignedIn(false);
       setUsername('');
       setUserRole(null);
-      setTab('orders');
+      setTab('home');
       setOtpSession(null);
       closeMerchantDialog();
     }
@@ -718,6 +738,8 @@ export default function DashboardApp() {
       loadTables(),
       loadPayments(),
       loadPromos(),
+      loadDashboardSummary(),
+      loadCallStaffRequests(),
       loadAnalytics(),
     ]);
     const failed = results.find((result) => result.status === 'rejected');
@@ -759,6 +781,19 @@ export default function DashboardApp() {
   async function loadPromos() {
     setPromos(await request('/api/admin/promos'));
   }
+  async function loadDashboardSummary() {
+    const data = await request('/api/admin/dashboard/summary');
+    setDashboardSummary(data);
+    return data;
+  }
+  async function loadCallStaffRequests() {
+    const data = await request('/api/admin/call-staff?limit=100');
+    setCallStaffRequests(data);
+    setDashboardSummary((current) =>
+      current ? { ...current, openCallStaffRequests: data.length } : current
+    );
+    return data;
+  }
   async function loadAnalytics() {
     setAnalyticsError('');
     try {
@@ -777,6 +812,8 @@ export default function DashboardApp() {
       loadOrders({ notifyNew: true }),
       loadKitchen(),
       loadPayments({ notifyNew: true }),
+      loadDashboardSummary(),
+      loadCallStaffRequests(),
       loadAnalytics(),
     ]);
     const failed = results.find((result) => result.status === 'rejected');
@@ -830,6 +867,32 @@ export default function DashboardApp() {
     if (didNotify) playSound('rush');
   }
 
+  function applyCallStaffUpdate(staffRequest) {
+    if (!staffRequest?.id) return;
+    setCallStaffRequests((current) => {
+      const next =
+        staffRequest.status === 'OPEN'
+          ? upsertById(current, staffRequest)
+          : current.filter((request) => request.id !== staffRequest.id);
+      setDashboardSummary((summary) =>
+        summary ? { ...summary, openCallStaffRequests: next.length } : summary
+      );
+      return next;
+    });
+    if (staffRequest.status === 'OPEN' && !notifiedCallStaffRef.current.has(staffRequest.id)) {
+      notifiedCallStaffRef.current.add(staffRequest.id);
+      gooeyToast.info(
+        t('callStaffRequests'),
+        goeyToastOptions({
+          id: `call-staff-${staffRequest.id}`,
+          description: `${t('table')} ${staffRequest.tableNumber || '-'} · ${formatClockTime(staffRequest.requestedAt)}`,
+          icon: <BellRing className="h-4 w-4" />,
+        })
+      );
+      playSound('rush');
+    }
+  }
+
   function mergePayments(nextPayments, options = {}) {
     const previousById = new Map(paymentsRef.current.map((payment) => [payment.id, payment]));
     const alertPayment =
@@ -861,6 +924,9 @@ export default function DashboardApp() {
   }
 
   async function updateOrderStatus(orderId, status) {
+    if (status === 'CANCELLED' && !window.confirm(t('confirmCancelOrder'))) {
+      return;
+    }
     const data = await request(`/api/admin/orders/${orderId}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status }),
@@ -895,6 +961,19 @@ export default function DashboardApp() {
       await loadKitchen().catch(() => {});
     } finally {
       setKitchenItemsUpdating(ids, false);
+    }
+  }
+
+  async function resolveCallStaffRequest(requestId) {
+    if (!requestId || resolvingCallStaffIds.includes(requestId)) return;
+    setResolvingCallStaffIds((current) => [...current, requestId]);
+    try {
+      const updated = await request(`/api/admin/call-staff/${requestId}/resolve`, { method: 'PATCH' });
+      applyCallStaffUpdate(updated);
+    } catch (error) {
+      setMessage(error.message || t('resolveFailed'));
+    } finally {
+      setResolvingCallStaffIds((current) => current.filter((id) => id !== requestId));
     }
   }
 
@@ -1210,6 +1289,7 @@ export default function DashboardApp() {
     Boolean(merchantOtpSession) && merchantOtpSecondsRemaining <= 0 && !merchantOtpVerified;
   const dashboardSections = useMemo(
     () => [
+      { id: 'home', label: t('operationsHome'), icon: Home },
       { id: 'orders', label: t('orders'), icon: Clock },
       { id: 'kitchen', label: t('kitchen'), icon: ChefHat },
       { id: 'menu', label: t('menu'), icon: Utensils },
@@ -1468,6 +1548,16 @@ export default function DashboardApp() {
           <div className="h-[65px]" aria-hidden="true" />
 
           <DashboardFrame className="py-6">
+            {tab === 'home' ? (
+              <OperationsHomeView
+                summary={dashboardSummary}
+                callStaffRequests={callStaffRequests}
+                resolvingCallStaffIds={resolvingCallStaffIds}
+                onResolveCallStaff={resolveCallStaffRequest}
+                onNavigate={setTab}
+              />
+            ) : null}
+
             {tab === 'orders' ? (
               <OrdersView
                 orders={orders}
@@ -2049,6 +2139,215 @@ function ChangeMerchantDetailsDialog({
   );
 }
 
+function OperationsHomeView({
+  summary,
+  callStaffRequests,
+  resolvingCallStaffIds,
+  onResolveCallStaff,
+  onNavigate,
+}) {
+  const { t } = useLanguage();
+  const resolvingIds = useMemo(() => new Set(resolvingCallStaffIds), [resolvingCallStaffIds]);
+  const cards = [
+    {
+      label: t('dailyRevenue'),
+      value: displayUsd(summary?.todayRevenueUsd || 0),
+      sub: khr(summary?.todayRevenueKhr || 0),
+      icon: BarChart3,
+    },
+    {
+      label: t('orders'),
+      value: String(summary?.todayOrders || 0),
+      sub: t('today'),
+      icon: CalendarDays,
+    },
+    {
+      label: t('unavailableItems'),
+      value: String(summary?.unavailableItems || 0),
+      sub: `${summary?.activeTables || 0} ${t('tables').toLowerCase()} ${t('active')}`,
+      icon: Utensils,
+    },
+    {
+      label: t('tables'),
+      value: String(summary?.activeTables || 0),
+      sub: `${summary?.inactiveTables || 0} ${t('inactive').toLowerCase()}`,
+      icon: Table2,
+    },
+  ];
+  const focusCards = [
+    {
+      label: t('callStaffRequests'),
+      value: String(summary?.openCallStaffRequests || callStaffRequests.length || 0),
+      sub: t('openRequests'),
+      icon: BellRing,
+      tone: 'accent',
+      tab: null,
+    },
+    {
+      label: t('kitchen'),
+      value: String(summary?.kitchenQueue || 0),
+      sub: t('kitchenPaidItems'),
+      icon: ChefHat,
+      tone: 'primary',
+      tab: 'kitchen',
+    },
+    {
+      label: t('paymentIssues'),
+      value: String(summary?.paymentIssues || 0),
+      sub: t('payments'),
+      icon: CreditCard,
+      tone: 'danger',
+      tab: 'payments',
+    },
+    {
+      label: t('activeOrders'),
+      value: String(summary?.activeOrders || 0),
+      sub: `${summary?.unpaidOrders || 0} ${t('unpaid').toLowerCase()}`,
+      icon: Clock,
+      tone: 'muted',
+      tab: 'orders',
+    },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold">{t('operationsOverview')}</h2>
+          <p className="text-sm text-muted-foreground">{t('liveRestaurantOps')}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={() => onNavigate('orders')}>
+            <Clock className="h-4 w-4" />
+            {t('orders')}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => onNavigate('kitchen')}>
+            <ChefHat className="h-4 w-4" />
+            {t('kitchen')}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => onNavigate('menu')}>
+            <Utensils className="h-4 w-4" />
+            {t('menu')}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => onNavigate('payments')}>
+            <CreditCard className="h-4 w-4" />
+            {t('payments')}
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-4">
+        {focusCards.map((card) => (
+          <button
+            key={card.label}
+            type="button"
+            className="rounded-md border border-border bg-card p-4 text-left transition hover:border-primary"
+            onClick={() => (card.tab ? onNavigate(card.tab) : undefined)}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-muted-foreground">{card.label}</p>
+                <p className="mt-1 text-3xl font-semibold leading-tight">{card.value}</p>
+                <p className="mt-1 truncate text-xs text-muted-foreground">{card.sub}</p>
+              </div>
+              <DashboardIconTone icon={card.icon} tone={card.tone} />
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {cards.map((card) => (
+          <DashboardMetricCard key={card.label} {...card} />
+        ))}
+      </div>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-3">
+          <CardTitle className="flex items-center gap-2">
+            <BellRing className="h-5 w-5 text-primary" />
+            {t('callStaffRequests')}
+          </CardTitle>
+          <Badge tone={callStaffRequests.length ? 'primary' : 'muted'}>
+            {callStaffRequests.length}
+          </Badge>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {callStaffRequests.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground">
+              {t('noCallStaffRequests')}
+            </div>
+          ) : (
+            callStaffRequests.map((requestItem) => (
+              <div
+                key={requestItem.id}
+                className="flex flex-col gap-3 rounded-md border border-border bg-background px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold">
+                      {t('table')} {requestItem.tableNumber || '-'}
+                    </span>
+                    {requestItem.orderNumber ? (
+                      <Badge tone="muted">{requestItem.orderNumber}</Badge>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {requestItem.tableLabel || t('tableLabel')} · {formatClockTime(requestItem.requestedAt)}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  disabled={resolvingIds.has(requestItem.id)}
+                  onClick={() => onResolveCallStaff(requestItem.id)}
+                >
+                  {resolvingIds.has(requestItem.id) ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Check className="h-4 w-4" />
+                  )}
+                  {t('resolve')}
+                </Button>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function DashboardMetricCard({ label, value, sub, icon: Icon }) {
+  return (
+    <Card>
+      <CardContent className="flex items-center justify-between gap-4 p-4">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-muted-foreground">{label}</p>
+          <p className="mt-1 text-2xl font-semibold">{value}</p>
+          <p className="mt-1 truncate text-xs text-muted-foreground">{sub}</p>
+        </div>
+        <DashboardIconTone icon={Icon} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function DashboardIconTone({ icon: Icon, tone = 'primary' }) {
+  const toneClass =
+    {
+      primary: 'bg-primary/10 text-primary',
+      accent: 'bg-accent/10 text-accent',
+      danger: 'bg-destructive/10 text-destructive',
+      muted: 'bg-muted text-muted-foreground',
+    }[tone] || 'bg-primary/10 text-primary';
+
+  return (
+    <div className={cn('flex h-11 w-11 shrink-0 items-center justify-center rounded-md', toneClass)}>
+      <Icon className="h-5 w-5" />
+    </div>
+  );
+}
+
 // Orders
 
 function OrdersView({
@@ -2407,6 +2706,7 @@ function OrderDetailContent({
     return <p className="text-sm text-muted-foreground">{t('selectOrderDetail')}</p>;
   }
   const needsAttention = needsKitchenAttention(selectedOrder, now);
+  const orderStatusActions = orderStatusActionOptions(selectedOrder);
 
   return (
     <div className="space-y-4">
@@ -2436,6 +2736,27 @@ function OrderDetailContent({
           <span>
             {t('waitingTooLong')} · {waitingMinutes(selectedOrder, now)}m
           </span>
+        </div>
+      ) : null}
+
+      {orderStatusActions.length > 0 ? (
+        <div className="rounded-md border border-border bg-muted/25 p-3">
+          <div className="mb-2 text-xs font-medium uppercase text-muted-foreground">
+            {t('update')} {t('orderStatus').toLowerCase()}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {orderStatusActions.map((status) => (
+              <Button
+                key={status}
+                type="button"
+                variant={status === 'COMPLETED' ? 'default' : 'outline'}
+                className="min-h-11"
+                onClick={() => onStatus(selectedOrder.id, status)}
+              >
+                {dashboardStatusLabel(status, t)}
+              </Button>
+            ))}
+          </div>
         </div>
       ) : null}
 
@@ -2469,7 +2790,7 @@ function OrderDetailContent({
                       <Button
                         type="button"
                         variant="outline"
-                        className="h-8 px-2 text-xs"
+                        className="h-11 px-3 text-xs"
                         disabled={['ACCEPTED', 'COMPLETED'].includes(itemStatus)}
                         onClick={() => onItemStatus(item.id, 'ACCEPTED')}
                       >
@@ -2477,7 +2798,7 @@ function OrderDetailContent({
                       </Button>
                       <Button
                         type="button"
-                        className="h-8 px-2 text-xs"
+                        className="h-11 px-3 text-xs"
                         disabled={itemStatus === 'COMPLETED'}
                         onClick={() => onItemStatus(item.id, 'COMPLETED')}
                       >
@@ -2539,7 +2860,11 @@ function OrderDetailContent({
 
       <div className="grid grid-cols-2 gap-2">
         {!['COMPLETED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(selectedOrder.status) ? (
-          <Button variant="destructive" onClick={() => onStatus(selectedOrder.id, 'CANCELLED')}>
+          <Button
+            variant="destructive"
+            className="min-h-11"
+            onClick={() => onStatus(selectedOrder.id, 'CANCELLED')}
+          >
             <X className="h-4 w-4" />
             {t('cancel')}
           </Button>
@@ -2774,7 +3099,7 @@ function KitchenItemCard({ item, now, onGroupStatus, onItemStatus, updatingItemI
                   <Button
                     type="button"
                     variant="outline"
-                    className="h-8 px-2 text-xs"
+                    className="h-11 px-3 text-xs"
                     disabled={['ACCEPTED', 'COMPLETED'].includes(row.kitchenStatus) || rowUpdating}
                     onClick={() => onItemStatus(row.id, 'ACCEPTED')}
                   >
@@ -2782,7 +3107,7 @@ function KitchenItemCard({ item, now, onGroupStatus, onItemStatus, updatingItemI
                   </Button>
                   <Button
                     type="button"
-                    className="h-8 px-2 text-xs"
+                    className="h-11 px-3 text-xs"
                     disabled={row.kitchenStatus === 'COMPLETED' || rowUpdating}
                     onClick={() => onItemStatus(row.id, 'COMPLETED')}
                   >
@@ -2798,6 +3123,7 @@ function KitchenItemCard({ item, now, onGroupStatus, onItemStatus, updatingItemI
           <Button
             type="button"
             variant="outline"
+            className="min-h-11"
             disabled={!canAcceptAll}
             onClick={() =>
               confirmKitchenGroupStatus({
@@ -2813,6 +3139,7 @@ function KitchenItemCard({ item, now, onGroupStatus, onItemStatus, updatingItemI
           </Button>
           <Button
             type="button"
+            className="min-h-11"
             disabled={isComplete || !canCompleteAll}
             onClick={() =>
               confirmKitchenGroupStatus({
@@ -2996,6 +3323,12 @@ function MenuView({ menu, request, reload }) {
     });
     return counts;
   }, [menu.items]);
+  const categoryById = useMemo(() => {
+    return menu.categories.reduce((lookup, category) => {
+      lookup[category.id] = category;
+      return lookup;
+    }, {});
+  }, [menu.categories]);
 
   function resetForm(nextMessage = '') {
     setEditingItem(null);
@@ -3199,15 +3532,19 @@ function MenuView({ menu, request, reload }) {
     event.preventDefault();
     setMessage('');
     const payload = menuItemPayload(form);
-    await request(
-      editingItem ? `/api/admin/menu/items/${editingItem.id}` : '/api/admin/menu/items',
-      {
-        method: editingItem ? 'PUT' : 'POST',
-        body: JSON.stringify(payload),
-      }
-    );
-    resetForm(editingItem ? t('menuItemUpdated') : t('menuItemCreated'));
-    reload();
+    try {
+      await request(
+        editingItem ? `/api/admin/menu/items/${editingItem.id}` : '/api/admin/menu/items',
+        {
+          method: editingItem ? 'PUT' : 'POST',
+          body: JSON.stringify(payload),
+        }
+      );
+      resetForm(editingItem ? t('menuItemUpdated') : t('menuItemCreated'));
+      reload();
+    } catch (error) {
+      setMessage(formatApiError(error, t('menuItemSaveFailed')));
+    }
   }
 
   async function toggle(item) {
@@ -3512,6 +3849,17 @@ function MenuView({ menu, request, reload }) {
                 onChange={uploadImage}
               />
             </label>
+            {form.imageUrl ? (
+              <div className="grid gap-3 rounded-md border border-border/70 bg-muted/20 p-3 sm:grid-cols-[112px_1fr] sm:items-center">
+                <div className="relative aspect-square overflow-hidden rounded-md bg-muted">
+                  <MenuImage src={form.imageUrl} alt={form.name || t('imageUrl')} sizes="112px" />
+                </div>
+                <div className="min-w-0 text-sm">
+                  <div className="font-medium">{t('imagePreview')}</div>
+                  <div className="mt-1 break-all text-xs text-muted-foreground">{form.imageUrl}</div>
+                </div>
+              </div>
+            ) : null}
             <Input
               value={form.dietaryTags}
               onChange={(e) => setForm({ ...form, dietaryTags: e.target.value })}
@@ -3792,33 +4140,41 @@ function MenuView({ menu, request, reload }) {
             </div>
           ) : null}
           {items.map((item) => (
-            <div key={item.id} className="flex h-full flex-col rounded-md border border-border p-3">
-              <div className="flex flex-1 flex-col items-center gap-3 text-center">
-                <div className="relative h-24 w-24 overflow-hidden rounded-md bg-muted">
-                  <MenuImage src={item.imageUrl} alt={item.name} sizes="96px" />
+            <div key={item.id} className="flex h-full flex-col rounded-md border border-border bg-card p-3">
+              <div className="flex min-w-0 flex-1 gap-3">
+                <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-md bg-muted">
+                  <MenuImage src={item.imageUrl} alt={item.name} sizes="80px" />
+                  {!item.available ? (
+                    <div className="absolute inset-0 bg-background/55 backdrop-blur-[1px]" />
+                  ) : null}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-col items-center gap-2">
-                    <h3 className="line-clamp-2 min-h-10 font-semibold">{item.name}</h3>
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h3 className="line-clamp-2 font-semibold leading-snug">{item.name}</h3>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {categoryById[item.categoryId]?.name || t('category')}
+                      </p>
+                    </div>
                     <Badge tone={item.available ? 'primary' : 'danger'}>
                       {item.available ? t('available') : t('hidden')}
                     </Badge>
                   </div>
-                  <p className="line-clamp-2 min-h-10 text-sm text-muted-foreground">
-                    {item.description}
+                  <p className="mt-2 line-clamp-2 min-h-9 text-sm text-muted-foreground">
+                    {item.description || t('noDescription')}
                   </p>
-                  <div className="mt-2 flex min-h-7 flex-wrap justify-center gap-1">
-                    {tags(item.dietaryTags).map((tag) => (
+                  <div className="mt-2 flex min-h-6 flex-wrap gap-1">
+                    {tags(item.dietaryTags).slice(0, 3).map((tag) => (
                       <Badge key={tag}>{tag}</Badge>
                     ))}
                   </div>
                 </div>
               </div>
-              <div className="mt-auto flex flex-col items-center gap-3 pt-3 text-sm">
-                <span className="whitespace-nowrap">
-                  {displayUsd(item.priceUsd)} / {khr(item.priceKhr)}
+              <div className="mt-3 flex flex-col gap-3 border-t border-border/60 pt-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+                <span className="font-semibold">
+                  {displayUsd(item.priceUsd)} <span className="font-normal text-muted-foreground">/ {khr(item.priceKhr)}</span>
                 </span>
-                <div className="flex gap-2">
+                <div className="grid grid-cols-2 gap-2 sm:flex">
                   <Button type="button" variant="outline" onClick={() => editItem(item)}>
                     <Pencil className="h-4 w-4" />
                     {t('edit')}
@@ -4864,6 +5220,15 @@ function canUpdateKitchenItem(order) {
     order?.paymentStatus === 'PAID' &&
     !['COMPLETED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(order?.status)
   );
+}
+
+function orderStatusActionOptions(order) {
+  if (!isAlreadyPaidOrder(order) || ['COMPLETED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(order?.status)) {
+    return [];
+  }
+  const flow = ['RECEIVED', 'PREPARING', 'READY', 'COMPLETED'];
+  const currentIndex = flow.indexOf(order?.status);
+  return flow.filter((_, index) => index > currentIndex).slice(0, 3);
 }
 
 function formatApiError(error, fallback) {
