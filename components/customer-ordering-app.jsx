@@ -2043,6 +2043,18 @@ function PaymentModal({
 
         <div className="space-y-4 p-5 text-center">
           {!isPaid && !isExpired ? (
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-12 w-full rounded-xl text-sm font-semibold"
+              onClick={() => downloadPaymentQrImage(order, payment, t)}
+            >
+              <Download className="h-4 w-4" />
+              {t('saveImage')}
+            </Button>
+          ) : null}
+
+          {!isPaid && !isExpired ? (
             <>
               <div
                 className="mx-auto w-full max-w-[340px] overflow-hidden rounded-2xl border border-border/60 bg-white text-slate-950 shadow-sm"
@@ -2131,16 +2143,7 @@ function PaymentModal({
               {t('downloadReceipt')} <ChevronRight className="h-4 w-4" />
             </a>
           ) : !isExpired ? (
-            <div className="grid gap-2 sm:grid-cols-2">
-              <Button
-                type="button"
-                variant="outline"
-                className="h-11 rounded-xl text-sm"
-                onClick={() => downloadPaymentQrImage(order, payment, t)}
-              >
-                <Download className="h-4 w-4" />
-                {t('saveImage')}
-              </Button>
+            <div className="grid gap-2">
               <Button
                 type="button"
                 variant="outline"
@@ -2158,25 +2161,25 @@ function PaymentModal({
                 {t('expiredQrHelp')}
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
-              <Button
-                type="button"
-                variant="outline"
-                className="h-11 rounded-xl text-sm"
-                disabled={checking}
-                onClick={onRefresh}
-              >
-                {checking ? <RefreshCw className="h-4 w-4 animate-spin" /> : null}
-                {checking ? t('checking') : t('refreshPaymentNow')}
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                className="h-11 rounded-xl text-sm"
-                onClick={onReissue}
-              >
-                <RefreshCw className="h-4 w-4" />
-                {t('generateNewQr')}
-              </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11 rounded-xl text-sm"
+                  disabled={checking}
+                  onClick={onRefresh}
+                >
+                  {checking ? <RefreshCw className="h-4 w-4 animate-spin" /> : null}
+                  {checking ? t('checking') : t('refreshPaymentNow')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="h-11 rounded-xl text-sm"
+                  onClick={onReissue}
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  {t('generateNewQr')}
+                </Button>
               </div>
             </div>
           )}

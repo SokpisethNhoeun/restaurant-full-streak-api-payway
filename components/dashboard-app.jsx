@@ -847,7 +847,7 @@ export default function DashboardApp() {
     if (selectedOrderRef.current?.id === order.id) {
       setSelectedOrder((current) => (current ? { ...current, ...order } : current));
     }
-    loadKitchen().catch(() => {});
+    refreshAfterLiveEvent({ kitchen: isPaidKitchenOrder(order) || order.paymentStatus === 'PAID' });
     if (shouldNotifyOrder(order) && (!previous || previous.status !== order.status)) {
       const didNotify = notifyOrderToast(order);
       if (didNotify) playSound(isPaidKitchenOrder(order) ? 'payment' : 'order');
@@ -918,9 +918,21 @@ export default function DashboardApp() {
       const didNotify = notifyPaymentToast(payment);
       if (didNotify) playSound('payment');
     }
-    if (payment.status === 'PAID') {
-      loadKitchen().catch(() => {});
-    }
+    refreshAfterLiveEvent({ kitchen: payment.status === 'PAID' });
+  }
+
+  function refreshAfterLiveEvent({ kitchen = false } = {}) {
+    Promise.allSettled([
+      loadOrders(),
+      loadPayments(),
+      loadDashboardSummary(),
+      ...(kitchen ? [loadKitchen()] : []),
+    ]).then((results) => {
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed) {
+        setMessage(failed.reason?.message || 'Live refresh failed');
+      }
+    });
   }
 
   async function updateOrderStatus(orderId, status) {
@@ -2176,6 +2188,14 @@ function OperationsHomeView({
   ];
   const focusCards = [
     {
+      label: t('pendingPaymentOrders'),
+      value: String(summary?.unpaidOrders || 0),
+      sub: t('pendingOrdersStayInOrders'),
+      icon: CreditCard,
+      tone: 'secondary',
+      tab: 'orders',
+    },
+    {
       label: t('callStaffRequests'),
       value: String(summary?.openCallStaffRequests || callStaffRequests.length || 0),
       sub: t('openRequests'),
@@ -2236,7 +2256,7 @@ function OperationsHomeView({
         </div>
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         {focusCards.map((card) => (
           <button
             key={card.label}
@@ -2336,6 +2356,7 @@ function DashboardIconTone({ icon: Icon, tone = 'primary' }) {
   const toneClass =
     {
       primary: 'bg-primary/10 text-primary',
+      secondary: 'bg-secondary/20 text-secondary-foreground',
       accent: 'bg-accent/10 text-accent',
       danger: 'bg-destructive/10 text-destructive',
       muted: 'bg-muted text-muted-foreground',
@@ -2429,6 +2450,19 @@ function OrdersView({
     () => displayedOrders.filter((order) => needsKitchenAttention(order, now)),
     [displayedOrders, now]
   );
+  const pendingPaymentOrders = useMemo(
+    () => orders.filter((order) => order.status === 'PENDING_PAYMENT'),
+    [orders]
+  );
+  const paidKitchenOrders = useMemo(
+    () =>
+      orders.filter(
+        (order) =>
+          isAlreadyPaidOrder(order) &&
+          !['COMPLETED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(order.status)
+      ),
+    [orders]
+  );
 
   return (
     <div className="grid gap-5 lg:grid-cols-[1fr_420px]">
@@ -2509,6 +2543,36 @@ function OrdersView({
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
+              onClick={() => {
+                setStatusFilter('PENDING_PAYMENT');
+                setPaymentFilter('');
+              }}
+              className={cn(
+                'rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted',
+                statusFilter === 'PENDING_PAYMENT'
+                  ? 'border-secondary bg-secondary/15 text-secondary-foreground'
+                  : 'border-border bg-card'
+              )}
+            >
+              {t('pendingPaymentOrders')} · {pendingPaymentOrders.length}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setStatusFilter('');
+                setPaymentFilter('PAID');
+              }}
+              className={cn(
+                'rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted',
+                paymentFilter === 'PAID'
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border bg-card'
+              )}
+            >
+              {t('paidKitchenOrders')} · {paidKitchenOrders.length}
+            </button>
+            <button
+              type="button"
               onClick={() => setDateFilter(dateInputValue(new Date()))}
               className="rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-muted"
             >
@@ -2527,6 +2591,25 @@ function OrdersView({
         </div>
 
         <CardContent className="space-y-3 pt-3">
+          {pendingPaymentOrders.length > 0 ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-secondary/40 bg-secondary/10 px-3 py-2 text-sm">
+              <span className="flex min-w-0 items-center gap-2 font-medium">
+                <CreditCard className="h-4 w-4 shrink-0 text-secondary-foreground" />
+                {t('pendingOrdersStayInOrders')} · {pendingPaymentOrders.length}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9 px-3 text-xs"
+                onClick={() => {
+                  setStatusFilter('PENDING_PAYMENT');
+                  setPaymentFilter('');
+                }}
+              >
+                {t('showDetail')}
+              </Button>
+            </div>
+          ) : null}
           {attentionOrders.length > 0 ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-secondary/40 bg-secondary/10 px-3 py-2 text-sm">
               <span className="flex min-w-0 items-center gap-2 font-medium">
